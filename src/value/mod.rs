@@ -217,7 +217,7 @@ impl Display for Value {
     /// // }
     /// let pretty = format!("{:#}", json);
     /// assert_eq!(pretty,
-    ///     "\"city\" = \"London\"\n\"street\" = \"10 Downing Street\"");
+    ///     "city = \"London\"\nstreet = \"10 Downing Street\"");
     /// ```
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         struct WriterFormatter<'a, 'b: 'a> {

@@ -341,9 +341,9 @@ fn test_write_object() {
             //     "b": {},
             //     "c": {}
             // }),
-            r#""a" = {}
-"b" = {}
-"c" = {}"#,
+            r#"a = {}
+b = {}
+c = {}"#,
         ),
         (
             treemap![
@@ -370,19 +370,19 @@ fn test_write_object() {
             //     "b": {},
             //     "c": {}
             // }),
-            r#""a" = {
-  "a" = {
-    "a" = [
+            r#"a = {
+  a = {
+    a = [
       1
       2
       3
     ]
   }
-  "b" = {}
-  "c" = {}
+  b = {}
+  c = {}
 }
-"b" = {}
-"c" = {}"#
+b = {}
+c = {}"#,
         ),
         (
             treemap![
@@ -409,19 +409,19 @@ fn test_write_object() {
             //     },
             //     "c": {}
             // }),
-            r#""a" = {}
-"b" = {
-  "a" = {
-    "a" = [
+            r#"a = {}
+b = {
+  a = {
+    a = [
       1
       2
       3
     ]
   }
-  "b" = {}
-  "c" = {}
+  b = {}
+  c = {}
 }
-"c" = {}"#
+c = {}"#,
         ),
         (
             treemap![
@@ -448,19 +448,19 @@ fn test_write_object() {
             //         "c": {}
             //     }
             // }),
-            r#""a" = {}
-"b" = {}
-"c" = {
-  "a" = {
-    "a" = [
+            r#"a = {}
+b = {}
+c = {
+  a = {
+    a = [
       1
       2
       3
     ]
   }
-  "b" = {}
-  "c" = {}
-}"#
+  b = {}
+  c = {}
+}"#,
         ),
     ]);
 
@@ -471,7 +471,7 @@ fn test_write_object() {
             // pretty_str!({
             //     "a": true
             // }),
-            r#""a" = true"#
+            r#"a = true"#,
         ),
         (
             treemap!(
@@ -482,8 +482,8 @@ fn test_write_object() {
             //     "a": true,
             //     "b": false
             // }),
-            r#""a" = true
-"b" = false"#
+            r#"a = true
+b = false"#,
         ),
     ]);
 
@@ -520,14 +520,14 @@ fn test_write_object() {
         //         }
         //     ]
         // }),
-        r#""b" = [
+        r#"b = [
   {
-    "c" = "\f\u001f\r"
+    c = "\f\u001f\r"
   }
   {
-    "d" = ""
+    d = ""
   }
-]"#
+]"#,
     )]);
 }
 
@@ -575,14 +575,14 @@ fn test_write_enum() {
         (Animal::Dog, "\"Dog\""),
         (
             Animal::Frog("Henry".to_owned(), vec![]),
-            r#""Frog" = [
+            r#"Frog = [
   "Henry"
   []
 ]"#,
         ),
         (
             Animal::Frog("Henry".to_owned(), vec![349]),
-            r#""Frog" = [
+            r#"Frog = [
   "Henry"
   [
     349
@@ -591,7 +591,7 @@ fn test_write_enum() {
         ),
         (
             Animal::Frog("Henry".to_owned(), vec![349, 102]),
-            r#""Frog" = [
+            r#"Frog = [
   "Henry"
   [
     349
@@ -1669,8 +1669,8 @@ fn test_serialize_map_with_no_len() {
     test_encode_ok(&[(map.clone(), "{\"a\":{},\"b\":{}}")]);
 
     let s = to_string_pretty(&map).unwrap();
-    let expected = r#""a" = {}
-"b" = {}"#;
+    let expected = r#"a = {}
+b = {}"#;
     assert_eq!(s, expected);
 }
 
