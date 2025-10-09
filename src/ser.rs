@@ -1539,6 +1539,12 @@ pub enum CharEscape {
 /// This trait abstracts away serializing the JSON control characters, which allows the user to
 /// optionally pretty print the JSON output.
 pub trait Formatter {
+    /// Indicates whether the formatter is processing a object key string
+    #[inline]
+    fn string_is_key(&self) -> bool {
+        false
+    }
+
     /// Writes a `null` value to the specified writer.
     #[inline]
     fn write_null<W>(&mut self, writer: &mut W) -> io::Result<()>
@@ -1946,6 +1952,7 @@ pub struct PrettyFormatter<'a> {
     object_depth: usize,
     current_indent: usize,
     has_value: bool,
+    is_key: bool,
     use_eqsign: bool,
     indent: &'a [u8],
 }
@@ -1962,6 +1969,7 @@ impl<'a> PrettyFormatter<'a> {
             object_depth: 0,
             current_indent: 0,
             has_value: false,
+            is_key: false,
             use_eqsign: true,
             indent,
         }
@@ -1975,6 +1983,27 @@ impl<'a> Default for PrettyFormatter<'a> {
 }
 
 impl<'a> Formatter for PrettyFormatter<'a> {
+    #[inline]
+    fn string_is_key(&self) -> bool {
+        self.is_key
+    }
+
+    #[inline]
+    fn begin_string<W>(&mut self, writer: &mut W) -> io::Result<()>
+    where
+        W: ?Sized + io::Write,
+    {
+        writer.write_all(b"\"")
+    }
+
+    #[inline]
+    fn end_string<W>(&mut self, writer: &mut W) -> io::Result<()>
+    where
+        W: ?Sized + io::Write,
+    {
+        writer.write_all(b"\"")
+    }
+
     #[inline]
     fn begin_array<W>(&mut self, writer: &mut W) -> io::Result<()>
     where
@@ -2062,6 +2091,7 @@ impl<'a> Formatter for PrettyFormatter<'a> {
     where
         W: ?Sized + io::Write,
     {
+        self.is_key = true;
         if self.object_depth > 1 || !first {
             tri!(writer.write_all(b"\n"));
         }
@@ -2073,6 +2103,7 @@ impl<'a> Formatter for PrettyFormatter<'a> {
     where
         W: ?Sized + io::Write,
     {
+        self.is_key = false;
         if self.use_eqsign {
             writer.write_all(b" = ")
         } else {
@@ -2090,14 +2121,24 @@ impl<'a> Formatter for PrettyFormatter<'a> {
     }
 }
 
+fn string_is_complex(value: &str) -> bool {
+    value.contains(&[
+        ' ', '\t', '\n', '\r', '\x0B', '\x0C', '|', ':', '=', '{', '}', '[', ']', ',',
+    ])
+}
+
 fn format_escaped_str<W, F>(writer: &mut W, formatter: &mut F, value: &str) -> io::Result<()>
 where
     W: ?Sized + io::Write,
     F: ?Sized + Formatter,
 {
-    tri!(formatter.begin_string(writer));
-    tri!(format_escaped_str_contents(writer, formatter, value));
-    formatter.end_string(writer)
+    if formatter.string_is_key() && !string_is_complex(value) {
+        format_escaped_str_contents(writer, formatter, value)
+    } else {
+        tri!(formatter.begin_string(writer));
+        tri!(format_escaped_str_contents(writer, formatter, value));
+        formatter.end_string(writer)
+    }
 }
 
 fn format_escaped_str_contents<W, F>(
