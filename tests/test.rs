@@ -336,11 +336,14 @@ fn test_write_object() {
                 "b".to_owned() => treemap![],
                 "c".to_owned() => treemap![],
             ],
-            pretty_str!({
-                "a": {},
-                "b": {},
-                "c": {}
-            }),
+            // pretty_str!({
+            //     "a": {},
+            //     "b": {},
+            //     "c": {}
+            // }),
+            r#""a" = {}
+"b" = {}
+"c" = {}"#,
         ),
         (
             treemap![
@@ -352,21 +355,34 @@ fn test_write_object() {
                 "b".to_owned() => treemap![],
                 "c".to_owned() => treemap![],
             ],
-            pretty_str!({
-                "a": {
-                    "a": {
-                        "a": [
-                            1,
-                            2,
-                            3
-                        ]
-                    },
-                    "b": {},
-                    "c": {}
-                },
-                "b": {},
-                "c": {}
-            }),
+            // pretty_str!({
+            //     "a": {
+            //         "a": {
+            //             "a": [
+            //                 1,
+            //                 2,
+            //                 3
+            //             ]
+            //         },
+            //         "b": {},
+            //         "c": {}
+            //     },
+            //     "b": {},
+            //     "c": {}
+            // }),
+            r#""a" = {
+  "a" = {
+    "a" = [
+      1
+      2
+      3
+    ]
+  }
+  "b" = {}
+  "c" = {}
+}
+"b" = {}
+"c" = {}"#
         ),
         (
             treemap![
@@ -378,21 +394,34 @@ fn test_write_object() {
                 ],
                 "c".to_owned() => treemap![],
             ],
-            pretty_str!({
-                "a": {},
-                "b": {
-                    "a": {
-                        "a": [
-                            1,
-                            2,
-                            3
-                        ]
-                    },
-                    "b": {},
-                    "c": {}
-                },
-                "c": {}
-            }),
+            // pretty_str!({
+            //     "a": {},
+            //     "b": {
+            //         "a": {
+            //             "a": [
+            //                 1,
+            //                 2,
+            //                 3
+            //             ]
+            //         },
+            //         "b": {},
+            //         "c": {}
+            //     },
+            //     "c": {}
+            // }),
+            r#""a" = {}
+"b" = {
+  "a" = {
+    "a" = [
+      1
+      2
+      3
+    ]
+  }
+  "b" = {}
+  "c" = {}
+}
+"c" = {}"#
         ),
         (
             treemap![
@@ -404,41 +433,57 @@ fn test_write_object() {
                     "c".to_owned() => treemap![],
                 ],
             ],
-            pretty_str!({
-                "a": {},
-                "b": {},
-                "c": {
-                    "a": {
-                        "a": [
-                            1,
-                            2,
-                            3
-                        ]
-                    },
-                    "b": {},
-                    "c": {}
-                }
-            }),
+            // pretty_str!({
+            //     "a": {},
+            //     "b": {},
+            //     "c": {
+            //         "a": {
+            //             "a": [
+            //                 1,
+            //                 2,
+            //                 3
+            //             ]
+            //         },
+            //         "b": {},
+            //         "c": {}
+            //     }
+            // }),
+            r#""a" = {}
+"b" = {}
+"c" = {
+  "a" = {
+    "a" = [
+      1
+      2
+      3
+    ]
+  }
+  "b" = {}
+  "c" = {}
+}"#
         ),
     ]);
 
     test_pretty_encode_ok(&[
-        (treemap!(), "{}"),
+        (treemap!(), ""),
         (
             treemap!("a".to_owned() => true),
-            pretty_str!({
-                "a": true
-            }),
+            // pretty_str!({
+            //     "a": true
+            // }),
+            r#""a" = true"#
         ),
         (
             treemap!(
                 "a".to_owned() => true,
                 "b".to_owned() => false,
             ),
-            pretty_str!( {
-                "a": true,
-                "b": false
-            }),
+            // pretty_str!( {
+            //     "a": true,
+            //     "b": false
+            // }),
+            r#""a" = true
+"b" = false"#
         ),
     ]);
 
@@ -465,16 +510,24 @@ fn test_write_object() {
 
     test_pretty_encode_ok(&[(
         complex_obj,
-        pretty_str!({
-            "b": [
-                {
-                    "c": (r#""\f\u001f\r""#)
-                },
-                {
-                    "d": ""
-                }
-            ]
-        }),
+        // pretty_str!({
+        //     "b": [
+        //         {
+        //             "c": (r#""\f\u001f\r""#)
+        //         },
+        //         {
+        //             "d": ""
+        //         }
+        //     ]
+        // }),
+        r#""b" = [
+  {
+    "c" = "\f\u001f\r"
+  }
+  {
+    "d" = ""
+  }
+]"#
     )]);
 }
 
@@ -522,35 +575,29 @@ fn test_write_enum() {
         (Animal::Dog, "\"Dog\""),
         (
             Animal::Frog("Henry".to_owned(), vec![]),
-            pretty_str!({
-                "Frog": [
-                    "Henry",
-                    []
-                ]
-            }),
+            r#""Frog" = [
+  "Henry"
+  []
+]"#,
         ),
         (
             Animal::Frog("Henry".to_owned(), vec![349]),
-            pretty_str!({
-                "Frog": [
-                    "Henry",
-                    [
-                        349
-                    ]
-                ]
-            }),
+            r#""Frog" = [
+  "Henry"
+  [
+    349
+  ]
+]"#,
         ),
         (
             Animal::Frog("Henry".to_owned(), vec![349, 102]),
-            pretty_str!({
-                "Frog": [
-                    "Henry",
-                    [
-                      349,
-                      102
-                    ]
-                ]
-            }),
+            r#""Frog" = [
+  "Henry"
+  [
+    349
+    102
+  ]
+]"#,
         ),
     ]);
 }
@@ -1622,10 +1669,8 @@ fn test_serialize_map_with_no_len() {
     test_encode_ok(&[(map.clone(), "{\"a\":{},\"b\":{}}")]);
 
     let s = to_string_pretty(&map).unwrap();
-    let expected = pretty_str!({
-        "a": {},
-        "b": {}
-    });
+    let expected = r#""a" = {}
+"b" = {}"#;
     assert_eq!(s, expected);
 }
 
