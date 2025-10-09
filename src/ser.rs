@@ -1943,8 +1943,10 @@ impl Formatter for CompactFormatter {}
 /// This structure pretty prints a JSON value to make it human readable.
 #[derive(Clone, Debug)]
 pub struct PrettyFormatter<'a> {
+    object_depth: usize,
     current_indent: usize,
     has_value: bool,
+    use_eqsign: bool,
     indent: &'a [u8],
 }
 
@@ -1957,8 +1959,10 @@ impl<'a> PrettyFormatter<'a> {
     /// Construct a pretty printer formatter that uses the `indent` string for indentation.
     pub fn with_indent(indent: &'a [u8]) -> Self {
         PrettyFormatter {
+            object_depth: 0,
             current_indent: 0,
             has_value: false,
+            use_eqsign: true,
             indent,
         }
     }
@@ -2001,7 +2005,7 @@ impl<'a> Formatter for PrettyFormatter<'a> {
     where
         W: ?Sized + io::Write,
     {
-        tri!(writer.write_all(if first { b"\n" } else { b",\n" }));
+        tri!(writer.write_all(b"\n"));
         indent(writer, self.current_indent, self.indent)
     }
 
@@ -2019,9 +2023,16 @@ impl<'a> Formatter for PrettyFormatter<'a> {
     where
         W: ?Sized + io::Write,
     {
-        self.current_indent += 1;
-        self.has_value = false;
-        writer.write_all(b"{")
+        if self.object_depth > 0 {
+            self.object_depth += 1;
+            self.current_indent += 1;
+            self.has_value = false;
+            writer.write_all(b"{")
+        } else {
+            self.object_depth += 1;
+            self.has_value = false;
+            Ok(())
+        }
     }
 
     #[inline]
@@ -2029,14 +2040,21 @@ impl<'a> Formatter for PrettyFormatter<'a> {
     where
         W: ?Sized + io::Write,
     {
-        self.current_indent -= 1;
+        if self.object_depth > 1 {
+            self.object_depth -= 1;
+            if self.current_indent > 0 {
+                self.current_indent -= 1;
+            }
+            if self.has_value {
+                tri!(writer.write_all(b"\n"));
+                tri!(indent(writer, self.current_indent, self.indent));
+            }
 
-        if self.has_value {
-            tri!(writer.write_all(b"\n"));
-            tri!(indent(writer, self.current_indent, self.indent));
+            writer.write_all(b"}")
+        } else {
+            self.object_depth = 0;
+            Ok(())
         }
-
-        writer.write_all(b"}")
     }
 
     #[inline]
@@ -2044,7 +2062,9 @@ impl<'a> Formatter for PrettyFormatter<'a> {
     where
         W: ?Sized + io::Write,
     {
-        tri!(writer.write_all(if first { b"\n" } else { b",\n" }));
+        if self.object_depth > 1 || !first {
+            tri!(writer.write_all(b"\n"));
+        }
         indent(writer, self.current_indent, self.indent)
     }
 
@@ -2053,7 +2073,11 @@ impl<'a> Formatter for PrettyFormatter<'a> {
     where
         W: ?Sized + io::Write,
     {
-        writer.write_all(b": ")
+        if self.use_eqsign {
+            writer.write_all(b" = ")
+        } else {
+            writer.write_all(b": ")
+        }
     }
 
     #[inline]
