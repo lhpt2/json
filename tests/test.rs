@@ -532,6 +532,34 @@ b = false"#,
 }
 
 #[test]
+fn test_double_quote_strings() {
+    let obj = json!({
+        "string": "hello"
+    });
+    test_pretty_encode_ok(&[(obj, r#"string = "hello""#)]);
+    let obj = json!({
+        "string long": "hello, world"
+    });
+    test_pretty_encode_ok(&[(obj, r#""string long" = "hello, world""#)]);
+    let obj = json!({
+        "string,long": "hello, world"
+    });
+    test_pretty_encode_ok(&[(obj, r#""string,long" = "hello, world""#)]);
+    let obj = json!({
+        "string|long": "hello, world"
+    });
+    test_pretty_encode_ok(&[(obj, r#""string|long" = "hello, world""#)]);
+    let obj = json!({
+        "string:long": "hello, world"
+    });
+    test_pretty_encode_ok(&[(obj, r#""string:long" = "hello, world""#)]);
+    let obj = json!({
+        "string=long": "hello, world"
+    });
+    test_pretty_encode_ok(&[(obj, r#""string=long" = "hello, world""#)]);
+}
+
+#[test]
 fn test_write_tuple() {
     test_encode_ok(&[((5,), "[5]")]);
 
