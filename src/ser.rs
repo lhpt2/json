@@ -2244,7 +2244,7 @@ where
                 } else {
                     tri!(formatter.begin_verbatim_string(writer, false));
                 }
-                tri!(format_escaped_str_contents(writer, formatter, slice));
+                tri!(formatter.write_string_fragment(writer, slice));
                 tri!(formatter.end_verbatim_string(writer));
             }
             Ok(())
