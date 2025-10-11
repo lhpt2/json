@@ -262,7 +262,16 @@ fn test_write_list() {
 
     test_pretty_encode_ok(&[(
         long_test_list,
-        pretty_str!([false, null, ["foo\nbar", 3.5]]),
+        r#"[
+  false
+  null
+  [
+    |foo
+    |bar
+
+    3.5
+  ]
+]"#,
     )]);
 }
 
@@ -583,9 +592,8 @@ fn test_verbatim_strings() {
     });
     test_pretty_encode_ok(&[(
         obj,
-        r#"string = 
-|hello
-|world
+        r#"string = |hello
+         |world
 "#,
     )]);
 
@@ -599,10 +607,20 @@ fn test_verbatim_strings() {
     });
     test_pretty_encode_ok(&[(
         obj,
-        r#"string = 
-|This one tests very long strings,
-|with multiple lines,
-|that belong to each other.
+        r#"string = |This one tests very long strings,
+         |with multiple lines,
+         |that belong to each other.
+"#,
+    )]);
+
+    let obj = json!({
+        "string with longer key": "This one tests very long strings,\nwith multiple lines,\nthat belong to each other."
+    });
+    test_pretty_encode_ok(&[(
+        obj,
+        r#""string with longer key" = |This one tests very long strings,
+                           |with multiple lines,
+                           |that belong to each other.
 "#,
     )]);
 }
@@ -1257,6 +1275,12 @@ fn test_parse_string() {
         ("\"\\u12ab\"", "\u{12ab}".to_owned()),
         ("\"\\uAB12\"", "\u{AB12}".to_owned()),
         ("\"\\uD83C\\uDF95\"", "\u{1F395}".to_owned()),
+        //         (
+        //             r#"|Teststring is
+        // |long
+        // "#,
+        //             "Teststring is\nlong".to_owned(),
+        //         ),
     ]);
 }
 
