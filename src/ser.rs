@@ -11,6 +11,7 @@ use core::hint;
 use core::num::FpCategory;
 use core::str;
 use serde::ser::{self, Impossible, Serialize};
+use std::println;
 
 /// A structure for serializing Rust values into JSON.
 #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
@@ -246,7 +247,7 @@ where
             .map_err(Error::io));
         tri!(self
             .formatter
-            .begin_object_key(&mut self.writer, true)
+            .begin_object_key(&mut self.writer, true, variant.len())
             .map_err(Error::io));
         tri!(self.serialize_str(variant));
         tri!(self
@@ -331,7 +332,7 @@ where
             .map_err(Error::io));
         tri!(self
             .formatter
-            .begin_object_key(&mut self.writer, true)
+            .begin_object_key(&mut self.writer, true, variant.len())
             .map_err(Error::io));
         tri!(self.serialize_str(variant));
         tri!(self
@@ -393,7 +394,7 @@ where
             .map_err(Error::io));
         tri!(self
             .formatter
-            .begin_object_key(&mut self.writer, true)
+            .begin_object_key(&mut self.writer, true, variant.len())
             .map_err(Error::io));
         tri!(self.serialize_str(variant));
         tri!(self
@@ -623,9 +624,22 @@ where
     {
         match self {
             Compound::Map { ser, state } => {
+                let mut key_str: Vec<u8> = Vec::new();
+                let mut tempser = Serializer::new(&mut key_str);
+                tri!(key.serialize(&mut tempser));
+                let key_string = String::from_utf8(key_str).expect("valid string");
+                let keylen = if string_is_complex(&key_string) {
+                    key_string.len()
+                } else {
+                    if key_string.len() as i32 - 2 < 0 {
+                        0_usize
+                    } else {
+                        (key_string.len() as i32 - 2) as usize
+                    }
+                };
                 tri!(ser
                     .formatter
-                    .begin_object_key(&mut ser.writer, *state == State::First)
+                    .begin_object_key(&mut ser.writer, *state == State::First, keylen)
                     .map_err(Error::io));
                 *state = State::Rest;
 
@@ -1551,12 +1565,6 @@ pub trait Formatter {
         false
     }
 
-    /// Indicates whether the formatter is processing an array
-    #[inline]
-    fn is_inside_array(&self) -> bool {
-        false
-    }
-
     /// Writes a `null` value to the specified writer.
     #[inline]
     fn write_null<W>(&mut self, writer: &mut W) -> io::Result<()>
@@ -1762,7 +1770,7 @@ pub trait Formatter {
     /// Called before verbatim (multiline) string is serialized in Serializer
     /// but only serialized differently from normal string in pretty Formatter
     #[inline]
-    fn begin_verbatim_string<W>(&mut self, writer: &mut W) -> io::Result<()>
+    fn begin_verbatim_string<W>(&mut self, writer: &mut W, first: bool) -> io::Result<()>
     where
         W: ?Sized + io::Write,
     {
@@ -1919,7 +1927,7 @@ pub trait Formatter {
 
     /// Called before every object key.
     #[inline]
-    fn begin_object_key<W>(&mut self, writer: &mut W, first: bool) -> io::Result<()>
+    fn begin_object_key<W>(&mut self, writer: &mut W, first: bool, keylen: usize) -> io::Result<()>
     where
         W: ?Sized + io::Write,
     {
@@ -1983,6 +1991,7 @@ impl Formatter for CompactFormatter {}
 pub struct PrettyFormatter<'a> {
     object_depth: usize,
     current_indent: usize,
+    current_keylen: usize,
     has_value: bool,
     is_key: bool,
     is_inside_array: bool,
@@ -2001,6 +2010,7 @@ impl<'a> PrettyFormatter<'a> {
         PrettyFormatter {
             object_depth: 0,
             current_indent: 0,
+            current_keylen: 0,
             has_value: false,
             is_key: false,
             is_inside_array: false,
@@ -2028,11 +2038,6 @@ impl<'a> Formatter for PrettyFormatter<'a> {
     }
 
     #[inline]
-    fn is_inside_array(&self) -> bool {
-        self.is_inside_array
-    }
-
-    #[inline]
     fn begin_string<W>(&mut self, writer: &mut W) -> io::Result<()>
     where
         W: ?Sized + io::Write,
@@ -2041,12 +2046,29 @@ impl<'a> Formatter for PrettyFormatter<'a> {
     }
 
     #[inline]
-    fn begin_verbatim_string<W>(&mut self, writer: &mut W) -> io::Result<()>
+    fn begin_verbatim_string<W>(&mut self, writer: &mut W, first: bool) -> io::Result<()>
     where
         W: ?Sized + io::Write,
     {
-        tri!(writer.write_all(b"\n"));
-        tri!(indent(writer, self.current_indent, self.indent));
+        if !first {
+            tri!(indent(writer, self.current_indent, self.indent));
+
+            // if value of a an json object indent until value (over keylength and separator)
+            if !self.is_inside_array {
+                //tri!(writer.write_all(&[self.current_keylen as u8]));
+                for _ in 0..self.current_keylen {
+                    tri!(writer.write_all(b" "));
+                }
+
+                // space and separator after key
+                tri!(writer.write_all(b" "));
+                tri!(writer.write_all(b" "));
+                if self.use_eqsign {
+                    tri!(writer.write_all(b" "));
+                }
+            }
+        }
+
         writer.write_all(b"|")
     }
 
@@ -2063,9 +2085,6 @@ impl<'a> Formatter for PrettyFormatter<'a> {
     where
         W: ?Sized + io::Write,
     {
-        if self.is_inside_array() {
-            tri!(writer.write_all(b"\n"));
-        }
         writer.write_all(b"\n")
     }
 
@@ -2154,10 +2173,11 @@ impl<'a> Formatter for PrettyFormatter<'a> {
     }
 
     #[inline]
-    fn begin_object_key<W>(&mut self, writer: &mut W, first: bool) -> io::Result<()>
+    fn begin_object_key<W>(&mut self, writer: &mut W, first: bool, keylen: usize) -> io::Result<()>
     where
         W: ?Sized + io::Write,
     {
+        self.current_keylen = keylen;
         self.is_key = true;
         if self.object_depth > 1 || !first {
             tri!(writer.write_all(b"\n"));
@@ -2218,11 +2238,16 @@ where
         } else if !formatter.string_is_key() && string_is_verbatim_candidate(value) {
             let val = value.replace("\r\n", "\n");
             let iter = val.split("\n");
-            for slice in iter {
-                tri!(formatter.begin_verbatim_string(writer));
+            for (i, slice) in iter.enumerate() {
+                if i == 0 {
+                    tri!(formatter.begin_verbatim_string(writer, true));
+                } else {
+                    tri!(formatter.begin_verbatim_string(writer, false));
+                }
                 tri!(format_escaped_str_contents(writer, formatter, slice));
+                tri!(formatter.end_verbatim_string(writer));
             }
-            formatter.end_verbatim_string(writer)
+            Ok(())
         } else {
             tri!(formatter.begin_string(writer));
             tri!(format_escaped_str_contents(writer, formatter, value));
