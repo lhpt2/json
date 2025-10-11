@@ -557,6 +557,54 @@ fn test_double_quote_strings() {
         "string=long": "hello, world"
     });
     test_pretty_encode_ok(&[(obj, r#""string=long" = "hello, world""#)]);
+    let obj = json!({
+        "string{long": "hello, world"
+    });
+    test_pretty_encode_ok(&[(obj, r#""string{long" = "hello, world""#)]);
+    let obj = json!({
+        "string}long": "hello, world"
+    });
+    test_pretty_encode_ok(&[(obj, r#""string}long" = "hello, world""#)]);
+    let obj = json!({
+        "string[long": "hello, world"
+    });
+    test_pretty_encode_ok(&[(obj, r#""string[long" = "hello, world""#)]);
+
+    let obj = json!({
+        "string]long": "hello, world"
+    });
+    test_pretty_encode_ok(&[(obj, r#""string]long" = "hello, world""#)]);
+}
+
+#[test]
+fn test_verbatim_strings() {
+    let obj = json!({
+        "string": "hello\nworld"
+    });
+    test_pretty_encode_ok(&[(
+        obj,
+        r#"string = 
+|hello
+|world
+"#,
+    )]);
+
+    let obj = json!({
+        "string": "di\nll"
+    });
+    test_pretty_encode_ok(&[(obj, r#"string = "di\nll""#)]);
+
+    let obj = json!({
+        "string": "This one tests very long strings,\nwith multiple lines,\nthat belong to each other."
+    });
+    test_pretty_encode_ok(&[(
+        obj,
+        r#"string = 
+|This one tests very long strings,
+|with multiple lines,
+|that belong to each other.
+"#,
+    )]);
 }
 
 #[test]
