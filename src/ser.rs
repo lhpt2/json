@@ -1539,9 +1539,21 @@ pub enum CharEscape {
 /// This trait abstracts away serializing the JSON control characters, which allows the user to
 /// optionally pretty print the JSON output.
 pub trait Formatter {
+    /// Indicates whether the formatter is a pretty formatter
+    #[inline]
+    fn is_pretty_formatter(&self) -> bool {
+        false
+    }
+
     /// Indicates whether the formatter is processing a object key string
     #[inline]
     fn string_is_key(&self) -> bool {
+        false
+    }
+
+    /// Indicates whether the formatter is processing an array
+    #[inline]
+    fn is_inside_array(&self) -> bool {
         false
     }
 
@@ -1745,6 +1757,26 @@ pub trait Formatter {
         W: ?Sized + io::Write,
     {
         writer.write_all(b"\"")
+    }
+
+    /// Called before verbatim (multiline) string is serialized in Serializer
+    /// but only serialized differently from normal string in pretty Formatter
+    #[inline]
+    fn begin_verbatim_string<W>(&mut self, writer: &mut W) -> io::Result<()>
+    where
+        W: ?Sized + io::Write,
+    {
+        self.begin_string(writer)
+    }
+
+    /// Called after verbatim (multiline) string is serialized in Serializer
+    /// but only serialized differently from normal string in pretty Formatter
+    #[inline]
+    fn end_verbatim_string<W>(&mut self, writer: &mut W) -> io::Result<()>
+    where
+        W: ?Sized + io::Write,
+    {
+        self.end_string(writer)
     }
 
     /// Called after each series of `write_string_fragment` and
@@ -1953,6 +1985,7 @@ pub struct PrettyFormatter<'a> {
     current_indent: usize,
     has_value: bool,
     is_key: bool,
+    is_inside_array: bool,
     use_eqsign: bool,
     indent: &'a [u8],
 }
@@ -1970,6 +2003,7 @@ impl<'a> PrettyFormatter<'a> {
             current_indent: 0,
             has_value: false,
             is_key: false,
+            is_inside_array: false,
             use_eqsign: true,
             indent,
         }
@@ -1984,8 +2018,18 @@ impl<'a> Default for PrettyFormatter<'a> {
 
 impl<'a> Formatter for PrettyFormatter<'a> {
     #[inline]
+    fn is_pretty_formatter(&self) -> bool {
+        true
+    }
+
+    #[inline]
     fn string_is_key(&self) -> bool {
         self.is_key
+    }
+
+    #[inline]
+    fn is_inside_array(&self) -> bool {
+        self.is_inside_array
     }
 
     #[inline]
@@ -1997,6 +2041,16 @@ impl<'a> Formatter for PrettyFormatter<'a> {
     }
 
     #[inline]
+    fn begin_verbatim_string<W>(&mut self, writer: &mut W) -> io::Result<()>
+    where
+        W: ?Sized + io::Write,
+    {
+        tri!(writer.write_all(b"\n"));
+        tri!(indent(writer, self.current_indent, self.indent));
+        writer.write_all(b"|")
+    }
+
+    #[inline]
     fn end_string<W>(&mut self, writer: &mut W) -> io::Result<()>
     where
         W: ?Sized + io::Write,
@@ -2005,10 +2059,22 @@ impl<'a> Formatter for PrettyFormatter<'a> {
     }
 
     #[inline]
+    fn end_verbatim_string<W>(&mut self, writer: &mut W) -> io::Result<()>
+    where
+        W: ?Sized + io::Write,
+    {
+        if self.is_inside_array() {
+            tri!(writer.write_all(b"\n"));
+        }
+        writer.write_all(b"\n")
+    }
+
+    #[inline]
     fn begin_array<W>(&mut self, writer: &mut W) -> io::Result<()>
     where
         W: ?Sized + io::Write,
     {
+        self.is_inside_array = true;
         self.current_indent += 1;
         self.has_value = false;
         writer.write_all(b"[")
@@ -2019,6 +2085,7 @@ impl<'a> Formatter for PrettyFormatter<'a> {
     where
         W: ?Sized + io::Write,
     {
+        self.is_inside_array = false;
         self.current_indent -= 1;
 
         if self.has_value {
@@ -2127,13 +2194,40 @@ fn string_is_complex(value: &str) -> bool {
     ])
 }
 
+fn string_is_verbatim_candidate(value: &str) -> bool {
+    let count = if let Some(countn) = value.find("\n") {
+        if let Some(countr) = value.find("\r") {
+            countr + countn
+        } else {
+            countn
+        }
+    } else {
+        0
+    };
+    count > 1 && value.len() > 5
+}
+
 fn format_escaped_str<W, F>(writer: &mut W, formatter: &mut F, value: &str) -> io::Result<()>
 where
     W: ?Sized + io::Write,
     F: ?Sized + Formatter,
 {
-    if formatter.string_is_key() && !string_is_complex(value) {
-        format_escaped_str_contents(writer, formatter, value)
+    if formatter.is_pretty_formatter() {
+        if formatter.string_is_key() && !string_is_complex(value) {
+            format_escaped_str_contents(writer, formatter, value)
+        } else if !formatter.string_is_key() && string_is_verbatim_candidate(value) {
+            let val = value.replace("\r\n", "\n");
+            let iter = val.split("\n");
+            for slice in iter {
+                tri!(formatter.begin_verbatim_string(writer));
+                tri!(format_escaped_str_contents(writer, formatter, slice));
+            }
+            formatter.end_verbatim_string(writer)
+        } else {
+            tri!(formatter.begin_string(writer));
+            tri!(format_escaped_str_contents(writer, formatter, value));
+            formatter.end_string(writer)
+        }
     } else {
         tri!(formatter.begin_string(writer));
         tri!(format_escaped_str_contents(writer, formatter, value));
