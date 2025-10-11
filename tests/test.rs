@@ -603,22 +603,33 @@ fn test_verbatim_strings() {
     test_pretty_encode_ok(&[(obj, r#"string = "di\nll""#)]);
 
     let obj = json!({
-        "string": "This one tests very long strings,\nwith multiple lines,\nthat belong to each other."
+        "string with longer key": "This one tests very long strings,\nwith multiple lines,\nthat belong to each other."
     });
     test_pretty_encode_ok(&[(
         obj,
-        r#"string = |This one tests very long strings,
+        r#""string with longer key" = |This one tests very long strings,
+                           |with multiple lines,
+                           |that belong to each other.
+"#,
+    )]);
+
+    let obj = json!({
+        "string": "This one tests very\\tlong strings,\nwith multiple lines,\nthat belong to each other."
+    });
+    test_pretty_encode_ok(&[(
+        obj,
+        r#"string = |This one tests very\tlong strings,
          |with multiple lines,
          |that belong to each other.
 "#,
     )]);
 
     let obj = json!({
-        "string with longer key": "This one tests very long strings,\nwith multiple lines,\nthat belong to each other."
+        "string with longer key": "This one tests\\nvery long strings,\nwith multiple lines,\nthat belong to each other."
     });
     test_pretty_encode_ok(&[(
         obj,
-        r#""string with longer key" = |This one tests very long strings,
+        r#""string with longer key" = |This one tests\nvery long strings,
                            |with multiple lines,
                            |that belong to each other.
 "#,
