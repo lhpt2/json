@@ -258,6 +258,14 @@ impl<'de, R: Read<'de>> Deserializer<R> {
                 Some(b' ' | b'\n' | b'\t' | b'\r') => {
                     self.eat_char();
                 }
+                // Handle comments
+                Some(b'#') => {
+                    self.eat_char();
+                    while tri!(self.peek()) != Some(b'\n') && tri!(self.peek()) != None {
+                        self.eat_char();
+                    }
+                    self.eat_char();
+                }
                 other => {
                     return Ok(other);
                 }

@@ -1445,6 +1445,27 @@ fn test_parse_struct() {
 }
 
 #[test]
+fn test_parse_comments() {
+    test_parse_ok(vec![(
+        "{
+                # here is comment #1
+                \"inner\": [
+                    { \"a\": null, # here is comment #2
+                    \"b\": 2, \"c\": [\"abc\", # here is comment #3
+                    \"xyz\"] }
+                ]
+            }",
+        Outer {
+            inner: vec![Inner {
+                a: (),
+                b: 2,
+                c: vec!["abc".to_owned(), "xyz".to_owned()],
+            }],
+        },
+    )]);
+}
+
+#[test]
 fn test_parse_option() {
     test_parse_ok(vec![
         ("null", None::<String>),
