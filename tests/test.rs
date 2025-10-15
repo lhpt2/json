@@ -1297,36 +1297,49 @@ fn test_parse_string() {
 
 #[test]
 fn test_parse_list() {
-    test_parse_err::<Vec<f64>>(&[
-        ("[", "EOF while parsing a list at line 1 column 1"),
-        ("[ ", "EOF while parsing a list at line 1 column 2"),
-        ("[1", "EOF while parsing a list at line 1 column 2"),
-        ("[1,", "EOF while parsing a value at line 1 column 3"),
-        ("[1,]", "trailing comma at line 1 column 4"),
-        ("[1 2]", "expected `,` or `]` at line 1 column 4"),
-        ("[]a", "trailing characters at line 1 column 3"),
-    ]);
+     test_parse_err::<Vec<f64>>(&[
+         ("[", "EOF while parsing a list at line 1 column 1"),
+         ("[ ", "EOF while parsing a list at line 1 column 2"),
+         ("[1", "EOF while parsing a list at line 1 column 2"),
+         ("[1,", "EOF while parsing a value at line 1 column 3"),
+         //("[1,]", "trailing comma at line 1 column 4"),
+         ("[1 2]", "expected `,` or `]` at line 1 column 4"),
+         ("[]a", "trailing characters at line 1 column 3"),
+     ]);
 
-    test_parse_ok(vec![
-        ("[]", vec![]),
-        ("[ ]", vec![]),
-        ("[null]", vec![()]),
-        (" [ null ] ", vec![()]),
-    ]);
+     test_parse_ok(vec![
+         ("[]", vec![]),
+         ("[ ]", vec![]),
+         ("[null]", vec![()]),
+         (" [ null ] ", vec![()]),
+     ]);
 
-    test_parse_ok(vec![("[true]", vec![true])]);
+     test_parse_ok(vec![("[true]", vec![true])]);
 
-    test_parse_ok(vec![("[3,1]", vec![3u64, 1]), (" [ 3 , 1 ] ", vec![3, 1])]);
+     test_parse_ok(vec![("[3,1]", vec![3u64, 1]), (" [ 3 , 1 ] ", vec![3, 1])]);
 
-    test_parse_ok(vec![("[[3], [1, 2]]", vec![vec![3u64], vec![1, 2]])]);
+     test_parse_ok(vec![("[[3], [1, 2]]", vec![vec![3u64], vec![1, 2]])]);
 
-    test_parse_ok(vec![("[1]", (1u64,))]);
+     test_parse_ok(vec![("[1]", (1u64,))]);
 
-    test_parse_ok(vec![("[1, 2]", (1u64, 2u64))]);
+     test_parse_ok(vec![("[1, 2]", (1u64, 2u64))]);
 
-    test_parse_ok(vec![("[1, 2, 3]", (1u64, 2u64, 3u64))]);
+     test_parse_ok(vec![("[1, 2, 3]", (1u64, 2u64, 3u64))]);
 
-    test_parse_ok(vec![("[1, [2, 3]]", (1u64, (2u64, 3u64)))]);
+     test_parse_ok(vec![("[1, [2, 3]]", (1u64, (2u64, 3u64)))]);
+
+    test_parse_ok(vec![("[\n1\n]", (1u64,))]);
+
+    // allow trailing commas
+    test_parse_ok(vec![("[\n1,\n]", (1u64,))]);
+    test_parse_ok(vec![("[\n1,]", (1u64,))]);
+
+    // allow newline as separator
+    //test_parse_ok(vec![("[1\n2]", (1u64, 2u64))]);
+
+    //test_parse_ok(vec![("[1\n2\n3]", (1u64, 2u64, 3u64))]);
+
+    //test_parse_ok(vec![("[1\n[2\n3]]", (1u64, (2u64, 3u64)))]);
 }
 
 #[test]
@@ -1509,10 +1522,10 @@ fn test_parse_enum_errors() {
             ("{\"Cat\":{\"age\": 5, \"name\": \"Kate\", \"foo\":\"bar\"}",
              "unknown field `foo`, expected `age` or `name` at line 1 column 39"),
 
-            // JSON does not allow trailing commas in data structures
-            ("{\"Cat\":[0, \"Kate\",]}", "trailing comma at line 1 column 19"),
-            ("{\"Cat\":{\"age\": 2, \"name\": \"Kate\",}}",
-             "trailing comma at line 1 column 34"),
+            // JSON does not allow trailing commas in data structures (allow in CSON)
+            //("{\"Cat\":[0, \"Kate\",]}", "trailing comma at line 1 column 19"),
+            //("{\"Cat\":{\"age\": 2, \"name\": \"Kate\",}}",
+            // "trailing comma at line 1 column 34"),
         ],
     );
 }

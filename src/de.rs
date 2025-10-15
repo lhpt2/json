@@ -1,9 +1,12 @@
-//! Deserialize JSON data to a Rust data structure.
+//! Deserialize JSON data to a Rust data structure./
 
+use crate::error::ErrorCode::EofWhileParsingValue;
 use crate::error::{Error, ErrorCode, Result};
 #[cfg(feature = "float_roundtrip")]
 use crate::lexical;
 use crate::number::Number;
+#[cfg(feature = "arbitrary_precision")]
+use crate::number::NumberDeserializer;
 use crate::read::{self, Fused, Reference};
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -15,9 +18,7 @@ use core::result;
 use core::str::FromStr;
 use serde::de::{self, Expected, Unexpected};
 use serde::forward_to_deserialize_any;
-
-#[cfg(feature = "arbitrary_precision")]
-use crate::number::NumberDeserializer;
+use std::println;
 
 pub use crate::read::{Read, SliceRead, StrRead};
 
@@ -144,7 +145,7 @@ impl<'de, R: Read<'de>> Deserializer<R> {
     /// This allows the `Deserializer` to validate that the input stream is at the end or that it
     /// only has trailing whitespace.
     pub fn end(&mut self) -> Result<()> {
-        match tri!(self.parse_whitespace()) {
+        match tri!(self.parse_whitespace(true)) {
             Some(_) => Err(self.peek_error(ErrorCode::TrailingCharacters)),
             None => Ok(()),
         }
@@ -252,11 +253,18 @@ impl<'de, R: Read<'de>> Deserializer<R> {
 
     /// Returns the first non-whitespace byte without consuming it, or `None` if
     /// EOF is encountered.
-    fn parse_whitespace(&mut self) -> Result<Option<u8>> {
+    fn parse_whitespace(&mut self, include_newline: bool) -> Result<Option<u8>> {
         loop {
             match tri!(self.peek()) {
-                Some(b' ' | b'\n' | b'\t' | b'\r') => {
+                Some(b' ' | b'\t' | b'\r') => {
                     self.eat_char();
+                }
+                newline @ Some(b'\n') => {
+                    if include_newline {
+                        self.eat_char();
+                    } else {
+                        return Ok(newline);
+                    }
                 }
                 // Handle comments
                 Some(b'#') => {
@@ -328,7 +336,7 @@ impl<'de, R: Read<'de>> Deserializer<R> {
     where
         V: de::Visitor<'any>,
     {
-        let peek = match tri!(self.parse_whitespace()) {
+        let peek = match tri!(self.parse_whitespace(true)) {
             Some(b) => b,
             None => {
                 return Err(self.peek_error(ErrorCode::EofWhileParsingValue));
@@ -367,7 +375,7 @@ impl<'de, R: Read<'de>> Deserializer<R> {
     {
         let mut buf = String::new();
 
-        match tri!(self.parse_whitespace()) {
+        match tri!(self.parse_whitespace(true)) {
             Some(b'-') => {
                 self.eat_char();
                 buf.push('-');
@@ -397,7 +405,7 @@ impl<'de, R: Read<'de>> Deserializer<R> {
     where
         V: de::Visitor<'any>,
     {
-        match tri!(self.parse_whitespace()) {
+        match tri!(self.parse_whitespace(true)) {
             Some(b'-') => {
                 return Err(self.peek_error(ErrorCode::NumberOutOfRange));
             }
@@ -1067,7 +1075,7 @@ impl<'de, R: Read<'de>> Deserializer<R> {
     }
 
     fn parse_object_colon(&mut self) -> Result<()> {
-        match tri!(self.parse_whitespace()) {
+        match tri!(self.parse_whitespace(true)) {
             Some(b':') => {
                 self.eat_char();
                 Ok(())
@@ -1078,15 +1086,18 @@ impl<'de, R: Read<'de>> Deserializer<R> {
     }
 
     fn end_seq(&mut self) -> Result<()> {
-        match tri!(self.parse_whitespace()) {
+        match tri!(self.parse_whitespace(true)) {
             Some(b']') => {
                 self.eat_char();
                 Ok(())
             }
             Some(b',') => {
                 self.eat_char();
-                match self.parse_whitespace() {
-                    Ok(Some(b']')) => Err(self.peek_error(ErrorCode::TrailingComma)),
+                match self.parse_whitespace(true) {
+                    Ok(Some(b']')) => {
+                        self.eat_char();
+                        Ok(())
+                    }
                     _ => Err(self.peek_error(ErrorCode::TrailingCharacters)),
                 }
             }
@@ -1096,7 +1107,7 @@ impl<'de, R: Read<'de>> Deserializer<R> {
     }
 
     fn end_map(&mut self) -> Result<()> {
-        match tri!(self.parse_whitespace()) {
+        match tri!(self.parse_whitespace(true)) {
             Some(b'}') => {
                 self.eat_char();
                 Ok(())
@@ -1111,14 +1122,17 @@ impl<'de, R: Read<'de>> Deserializer<R> {
         self.scratch.clear();
         let mut enclosing = None;
 
+        // loop through next value
         loop {
-            let peek = match tri!(self.parse_whitespace()) {
+            // get next character of next value
+            let peek = match tri!(self.parse_whitespace(true)) {
                 Some(b) => b,
                 None => {
                     return Err(self.peek_error(ErrorCode::EofWhileParsingValue));
                 }
             };
 
+            // parse depending on type
             let frame = match peek {
                 b'n' => {
                     self.eat_char();
@@ -1157,22 +1171,45 @@ impl<'de, R: Read<'de>> Deserializer<R> {
                 _ => return Err(self.peek_error(ErrorCode::ExpectedSomeValue)),
             };
 
+            // determine position in nested structure
             let (mut accept_comma, mut frame) = match frame {
+                // start of nested structure
                 Some(frame) => (false, frame),
+                // enclosing is next upper enclosing
                 None => match enclosing.take() {
                     Some(frame) => (true, frame),
+                    // scratch holds parent structures further up
                     None => match self.scratch.pop() {
                         Some(frame) => (true, frame),
+                        // no bigger structure at current value left value skipping done
                         None => return Ok(()),
                     },
                 },
             };
 
+            // loop to come out of nested structures
             loop {
-                match tri!(self.parse_whitespace()) {
+                match tri!(self.parse_whitespace(true)) {
                     Some(b',') if accept_comma => {
                         self.eat_char();
-                        break;
+                        match tri!(self.parse_whitespace(true)) {
+                            Some(b']') if frame == b'[' => {
+                                continue;
+                            }
+                            Some(b'}') if frame == b'{' => {
+                                continue;
+                            }
+                            Some(_) => {
+                                break;
+                            }
+                            None => {
+                                return Err(self.peek_error(match frame {
+                                    b'[' => ErrorCode::EofWhileParsingList,
+                                    b'{' => ErrorCode::EofWhileParsingObject,
+                                    _ => unreachable!(),
+                                }));
+                            }
+                        }
                     }
                     Some(b']') if frame == b'[' => {}
                     Some(b'}') if frame == b'{' => {}
@@ -1203,21 +1240,24 @@ impl<'de, R: Read<'de>> Deserializer<R> {
                 };
                 accept_comma = true;
             }
+            // exited all nested structures -> next element
 
+            // parse key and colon if inside a map/struct
             if frame == b'{' {
-                match tri!(self.parse_whitespace()) {
+                match tri!(self.parse_whitespace(true)) {
                     Some(b'"') => self.eat_char(),
                     Some(_) => return Err(self.peek_error(ErrorCode::KeyMustBeAString)),
                     None => return Err(self.peek_error(ErrorCode::EofWhileParsingObject)),
                 }
                 tri!(self.read.ignore_str());
-                match tri!(self.parse_whitespace()) {
+                match tri!(self.parse_whitespace(true)) {
                     Some(b':') => self.eat_char(),
                     Some(_) => return Err(self.peek_error(ErrorCode::ExpectedColon)),
                     None => return Err(self.peek_error(ErrorCode::EofWhileParsingObject)),
                 }
             }
 
+            // save current nested structure
             enclosing = Some(frame);
         }
     }
@@ -1294,7 +1334,7 @@ impl<'de, R: Read<'de>> Deserializer<R> {
     where
         V: de::Visitor<'de>,
     {
-        tri!(self.parse_whitespace());
+        tri!(self.parse_whitespace(true));
         self.read.begin_raw_buffering();
         tri!(self.ignore_value());
         self.read.end_raw_buffering(visitor)
@@ -1402,7 +1442,7 @@ impl<'de, R: Read<'de>> de::Deserializer<'de> for &mut Deserializer<R> {
     where
         V: de::Visitor<'de>,
     {
-        let peek = match tri!(self.parse_whitespace()) {
+        let peek = match tri!(self.parse_whitespace(true)) {
             Some(b) => b,
             None => {
                 return Err(self.peek_error(ErrorCode::EofWhileParsingValue));
@@ -1478,7 +1518,7 @@ impl<'de, R: Read<'de>> de::Deserializer<'de> for &mut Deserializer<R> {
     where
         V: de::Visitor<'de>,
     {
-        let peek = match tri!(self.parse_whitespace()) {
+        let peek = match tri!(self.parse_whitespace(true)) {
             Some(b) => b,
             None => {
                 return Err(self.peek_error(ErrorCode::EofWhileParsingValue));
@@ -1533,7 +1573,7 @@ impl<'de, R: Read<'de>> de::Deserializer<'de> for &mut Deserializer<R> {
     where
         V: de::Visitor<'de>,
     {
-        let peek = match tri!(self.parse_whitespace()) {
+        let peek = match tri!(self.parse_whitespace(true)) {
             Some(b) => b,
             None => {
                 return Err(self.peek_error(ErrorCode::EofWhileParsingValue));
@@ -1642,7 +1682,7 @@ impl<'de, R: Read<'de>> de::Deserializer<'de> for &mut Deserializer<R> {
     where
         V: de::Visitor<'de>,
     {
-        let peek = match tri!(self.parse_whitespace()) {
+        let peek = match tri!(self.parse_whitespace(true)) {
             Some(b) => b,
             None => {
                 return Err(self.peek_error(ErrorCode::EofWhileParsingValue));
@@ -1682,7 +1722,7 @@ impl<'de, R: Read<'de>> de::Deserializer<'de> for &mut Deserializer<R> {
     where
         V: de::Visitor<'de>,
     {
-        match tri!(self.parse_whitespace()) {
+        match tri!(self.parse_whitespace(true)) {
             Some(b'n') => {
                 self.eat_char();
                 tri!(self.parse_ident(b"ull"));
@@ -1696,7 +1736,7 @@ impl<'de, R: Read<'de>> de::Deserializer<'de> for &mut Deserializer<R> {
     where
         V: de::Visitor<'de>,
     {
-        let peek = match tri!(self.parse_whitespace()) {
+        let peek = match tri!(self.parse_whitespace(true)) {
             Some(b) => b,
             None => {
                 return Err(self.peek_error(ErrorCode::EofWhileParsingValue));
@@ -1746,7 +1786,7 @@ impl<'de, R: Read<'de>> de::Deserializer<'de> for &mut Deserializer<R> {
     where
         V: de::Visitor<'de>,
     {
-        let peek = match tri!(self.parse_whitespace()) {
+        let peek = match tri!(self.parse_whitespace(true)) {
             Some(b) => b,
             None => {
                 return Err(self.peek_error(ErrorCode::EofWhileParsingValue));
@@ -1797,7 +1837,7 @@ impl<'de, R: Read<'de>> de::Deserializer<'de> for &mut Deserializer<R> {
     where
         V: de::Visitor<'de>,
     {
-        let peek = match tri!(self.parse_whitespace()) {
+        let peek = match tri!(self.parse_whitespace(true)) {
             Some(b) => b,
             None => {
                 return Err(self.peek_error(ErrorCode::EofWhileParsingValue));
@@ -1834,7 +1874,7 @@ impl<'de, R: Read<'de>> de::Deserializer<'de> for &mut Deserializer<R> {
     where
         V: de::Visitor<'de>,
     {
-        let peek = match tri!(self.parse_whitespace()) {
+        let peek = match tri!(self.parse_whitespace(true)) {
             Some(b) => b,
             None => {
                 return Err(self.peek_error(ErrorCode::EofWhileParsingValue));
@@ -1885,7 +1925,7 @@ impl<'de, R: Read<'de>> de::Deserializer<'de> for &mut Deserializer<R> {
     where
         V: de::Visitor<'de>,
     {
-        match tri!(self.parse_whitespace()) {
+        match tri!(self.parse_whitespace(true)) {
             Some(b'{') => {
                 check_recursion! {
                     self.eat_char();
@@ -1893,7 +1933,7 @@ impl<'de, R: Read<'de>> de::Deserializer<'de> for &mut Deserializer<R> {
                 }
                 let value = tri!(ret);
 
-                match tri!(self.parse_whitespace()) {
+                match tri!(self.parse_whitespace(true)) {
                     Some(b'}') => {
                         self.eat_char();
                         Ok(value)
@@ -1945,7 +1985,7 @@ impl<'de, 'a, R: Read<'de> + 'a> de::SeqAccess<'de> for SeqAccess<'a, R> {
         fn has_next_element<'de, 'a, R: Read<'de> + 'a>(
             seq: &mut SeqAccess<'a, R>,
         ) -> Result<bool> {
-            let peek = match tri!(seq.de.parse_whitespace()) {
+            let peek = match tri!(seq.de.parse_whitespace(false)) {
                 Some(b) => b,
                 None => {
                     return Err(seq.de.peek_error(ErrorCode::EofWhileParsingList));
@@ -1957,10 +1997,12 @@ impl<'de, 'a, R: Read<'de> + 'a> de::SeqAccess<'de> for SeqAccess<'a, R> {
             } else if seq.first {
                 seq.first = false;
                 Ok(true)
-            } else if peek == b',' {
+            } else if peek == b'\n' || peek == b',' {
                 seq.de.eat_char();
-                match tri!(seq.de.parse_whitespace()) {
-                    Some(b']') => Err(seq.de.peek_error(ErrorCode::TrailingComma)),
+                match tri!(seq.de.parse_whitespace(true)) {
+                    //Some(b']') => Err(seq.de.peek_error(ErrorCode::TrailingComma)),
+                    Some(b']') => Ok(false),
+                    Some(b'\n') => Ok(true),
                     Some(_) => Ok(true),
                     None => Err(seq.de.peek_error(ErrorCode::EofWhileParsingValue)),
                 }
@@ -1996,7 +2038,7 @@ impl<'de, 'a, R: Read<'de> + 'a> de::MapAccess<'de> for MapAccess<'a, R> {
         K: de::DeserializeSeed<'de>,
     {
         fn has_next_key<'de, 'a, R: Read<'de> + 'a>(map: &mut MapAccess<'a, R>) -> Result<bool> {
-            let peek = match tri!(map.de.parse_whitespace()) {
+            let peek = match tri!(map.de.parse_whitespace(true)) {
                 Some(b) => b,
                 None => {
                     return Err(map.de.peek_error(ErrorCode::EofWhileParsingObject));
@@ -2014,7 +2056,7 @@ impl<'de, 'a, R: Read<'de> + 'a> de::MapAccess<'de> for MapAccess<'a, R> {
                 }
             } else if peek == b',' {
                 map.de.eat_char();
-                match tri!(map.de.parse_whitespace()) {
+                match tri!(map.de.parse_whitespace(true)) {
                     Some(b'"') => Ok(true),
                     Some(b'}') => Err(map.de.peek_error(ErrorCode::TrailingComma)),
                     Some(_) => Err(map.de.peek_error(ErrorCode::KeyMustBeAString)),
@@ -2464,7 +2506,7 @@ where
         // skip whitespaces, if any
         // this helps with trailing whitespaces, since whitespaces between
         // values are handled for us.
-        match self.de.parse_whitespace() {
+        match self.de.parse_whitespace(true) {
             Ok(None) => {
                 self.offset = self.de.read.byte_offset();
                 None
