@@ -1335,11 +1335,11 @@ fn test_parse_list() {
     test_parse_ok(vec![("[\n1,]", (1u64,))]);
 
     // allow newline as separator
-    //test_parse_ok(vec![("[1\n2]", (1u64, 2u64))]);
+    test_parse_ok(vec![("[1\n2]", (1u64, 2u64))]);
 
-    //test_parse_ok(vec![("[1\n2\n3]", (1u64, 2u64, 3u64))]);
+    test_parse_ok(vec![("[1\n2\n3]", (1u64, 2u64, 3u64))]);
 
-    //test_parse_ok(vec![("[1\n[2\n3]]", (1u64, (2u64, 3u64)))]);
+    test_parse_ok(vec![("[1\n[2\n3]]", (1u64, (2u64, 3u64)))]);
 }
 
 #[test]

@@ -1189,8 +1189,8 @@ impl<'de, R: Read<'de>> Deserializer<R> {
 
             // loop to come out of nested structures
             loop {
-                match tri!(self.parse_whitespace(true)) {
-                    Some(b',') if accept_comma => {
+                match tri!(self.parse_whitespace(false)) {
+                    Some(b',' | b'\n') if accept_comma => {
                         self.eat_char();
                         match tri!(self.parse_whitespace(true)) {
                             Some(b']') if frame == b'[' => {
