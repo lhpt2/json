@@ -20,9 +20,10 @@
 	
 	    nativeBuildInputs = with pkgs; [
 			libclang
-    		pkg-config
+    			pkg-config
 			cmake
   		] ++ [
+		  lldb
   		];
 		
       packages = [
