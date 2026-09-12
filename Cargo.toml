@@ -1,3 +1,7 @@
+[workspace]
+[patch.crates-io]
+serde_json = { path = "." }
+
 [package]
 name = "serde_json"
 version = "1.0.151"
