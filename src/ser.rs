@@ -11,7 +11,6 @@ use core::hint;
 use core::num::FpCategory;
 use core::str;
 use serde::ser::{self, Impossible, Serialize};
-use std::println;
 
 /// A structure for serializing Rust values into JSON.
 #[cfg_attr(docsrs, doc(cfg(feature = "std")))]

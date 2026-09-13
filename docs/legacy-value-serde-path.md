@@ -119,6 +119,48 @@ you've verified you're only ever going to *write*, not read, that output)
 with `Quote::Double`, and be aware that any bare key or verbatim string
 the writer emits is already a one-way trip.
 
+## What's untouched: this is still generic serde_json infrastructure
+
+The CSON patches only touch grammar (what bytes are accepted/emitted).
+Everything format-independent that upstream serde_json provides is intact
+and unaffected by any of this:
+
+- **`no_std` + `alloc`**: `cargo build --no-default-features --features
+  alloc` builds. (It didn't, as of the commit right before this doc: two
+  stray `use std::println;` imports — dead code, `println!` only ever
+  appeared inside doc comments — broke the alloc-only build. Removed as
+  part of writing this doc, since it directly answers "what's kept.")
+  `IoRead`/`std::error::Error` impls/etc. stay behind `#[cfg(feature =
+  "std")]` as before; `SliceRead`/`StrRead` and the `Value` tree work
+  under `alloc` alone.
+- **All five opt-in Cargo features** build (verified individually, with
+  `std`): `preserve_order` (`Map` backed by `indexmap`, insertion order
+  preserved), `raw_value` (`RawValue`, deferred/passthrough parsing),
+  `unbounded_depth` (opt out of the recursion-depth guard),
+  `float_roundtrip` (exact float round-tripping via the bundled `lexical`
+  module), `arbitrary_precision` (arbitrary-size numbers as `String`
+  internally — this is also where the raw-text-capturing number scanner
+  documented in [`document-module.md`](./document-module.md) lives).
+- **`Read`/`Write` generality**: `from_reader`/`to_writer` over any
+  `std::io::Read`/`Write`, not just in-memory strings, are unaffected —
+  none of the CSON patches touch `IoRead` specifically.
+- **The `serde::Serialize`/`Deserialize` derive ecosystem**: any type with
+  `#[derive(Serialize, Deserialize)]` still round-trips through this path
+  exactly as with upstream serde_json (modulo the CSON grammar table
+  above) — the patches live in the `Value`/token-level machinery, not in
+  how `derive` interacts with it. Every existing test in `tests/test.rs`
+  using derived types is exercising this.
+- **`Value`'s API surface**: indexing, `json!` macro, `to_value`/
+  `from_value`, `Number`, `Map` — none of this changed.
+
+In short: this path is "serde_json, with the token-level grammar loosened
+to accept/emit CSON," not a fork that traded away serde_json's own
+portability or ecosystem integration to get there. What it *doesn't* do
+is preserve comments — that's the one thing structurally impossible to
+retrofit onto this path (see the top of this document), and it's the
+entire reason [`document-module.md`](./document-module.md) exists as a
+second, independent pipeline.
+
 ## Tests
 
 - `tests/test.rs`: `test_parse_comments`, `test_verbatim_strings`, plus

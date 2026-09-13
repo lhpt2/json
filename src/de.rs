@@ -18,7 +18,6 @@ use core::result;
 use core::str::FromStr;
 use serde::de::{self, Expected, Unexpected};
 use serde::forward_to_deserialize_any;
-use std::println;
 
 pub use crate::read::{Read, SliceRead, StrRead};
 
