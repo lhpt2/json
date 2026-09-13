@@ -8,6 +8,22 @@ serde_json::Value` / any `Deserialize` type, directly) — it has no concept
 of trivia and cannot round-trip comments. For that, see
 [`document-module.md`](./document-module.md).
 
+## This path's Schicht 2/3 already exist
+
+`document-module.md`'s Schicht 2/3 (`impl serde::Deserializer for &Node` /
+`impl serde::Serializer with Ok = Node`) have a direct equivalent here
+that predates all of this: `src/value/de.rs`'s `impl<'de> Deserializer<'de>
+for &'de Value` and `src/value/ser.rs`'s `Serializer { type Ok = Value }`,
+exposed as `crate::to_value`/`crate::from_value`. This is not something
+that needed building — it's core, long-standing serde_json functionality,
+exercised throughout `tests/test.rs` already (`test_integer128_to_value`,
+`test_json_macro`, etc.), and it's in fact what the new module's own
+`de.rs`/`ser.rs` were directly modeled on. The one thing it structurally
+cannot do, no matter how it's extended, is preserve comments — `Value`
+has nowhere to put them — which is the entire reason
+[`document-module.md`](./document-module.md)'s pipeline exists as a
+separate thing rather than as more patches here.
+
 This file exists to answer one question precisely: **for a given piece of
 CSON syntax, does the legacy path actually read it, actually write it, or
 neither?** The two are not symmetric.

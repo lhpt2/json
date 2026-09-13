@@ -10,35 +10,38 @@ pipeline this exists alongside, see
 
 ## Status
 
-Implemented: **Schicht 1** (lexer → comment-reattachment pass → parser)
-plus the style-detection/writer step that has to exist for Schicht 1's own
-round-trip invariants to be testable at all.
+Implemented: **Schicht 1** (lexer → comment-reattachment pass → parser),
+the style-detection/writer step Schicht 1's own round-trip invariants need
+to be testable at all, **Schicht 2** (`impl serde::Deserializer for
+&Node`, in `de.rs`) and **Schicht 3** (`impl serde::Serializer with Ok =
+Node`, in `ser.rs`).
 
-Not implemented yet, in the order `CLAUDE.md` prescribes building them:
-- Schicht 2 — `impl serde::Deserializer for &Node` (typed reads without
-  losing the ability to also edit).
-- Schicht 3 — `impl serde::Serializer with Ok = Node`, and `merge_from`
-  (typed edit-in-place: parse → deserialize → mutate the struct →
-  `merge_from` → write, keeping every untouched comment).
-
-Because of that, the public API today is intentionally small: parse a
-document, walk it read-only, edit `Node::prefix` directly (validated), and
-write it back out. There is no typed access yet.
+Not implemented yet: **`merge_from`** — diffing a freshly `Serialize`d
+tree against an existing, comment-carrying one, so a typed edit only
+touches the fields that actually changed and every other node (and its
+comments) is left alone. That's a genuinely separate step from "having
+both a Deserializer and a Serializer" — see "What Schicht 2/3 do and
+don't give you" below for exactly why, since it's a common
+misconception that the two together already add up to it.
 
 ## Module layout
 
 ```
 src/document/
-  mod.rs     data model (Document, Node, Value, Entry, Number, CsonStr),
-             ParseError, the public parse() entry point, Display/
-             to_cson_string()
-  lexer.rs   text -> flat token/trivia stream
-  trivia.rs  the comment line-anchor reattachment pass
-  parser.rs  recursive descent: token/trivia stream -> Document tree,
-             latching Style along the way
-  style.rs   the Style struct and its first-match setters/getters
-  writer.rs  Document + Style -> text
-  tests.rs   round-trip invariant tests (#[cfg(test)])
+  mod.rs        data model (Document, Node, Value, Entry, Number,
+                 CsonStr), ParseError, the public parse() entry point,
+                 Display/to_cson_string(), Document::deserialize/
+                 from_serialize
+  lexer.rs      text -> flat token/trivia stream
+  trivia.rs     the comment line-anchor reattachment pass
+  parser.rs     recursive descent: token/trivia stream -> Document tree,
+                latching Style along the way
+  style.rs      the Style struct and its first-match setters/getters
+  writer.rs     Document + Style -> text
+  de.rs         Schicht 2: impl serde::Deserializer for &Node
+  ser.rs        Schicht 3: impl serde::Serializer with Ok = Node
+  tests.rs      Schicht 1 round-trip invariant tests (#[cfg(test)])
+  serde_tests.rs Schicht 2/3 tests (#[cfg(test)])
 ```
 
 ## Data model
@@ -215,6 +218,68 @@ because the underlying access pattern genuinely doesn't match:
   optional exp), documented as mirroring that scanner. Comparing the two
   side by side while writing this surfaced a real bug that's now fixed:
   `01`-style leading-zero literals weren't being rejected.
+
+## Schicht 2 and 3
+
+`de.rs` and `ser.rs` mirror `src/value/de.rs`'s `impl<'de> Deserializer<'de>
+for &'de Value` and `src/value/ser.rs`'s `Serializer { type Ok = Value }`
+closely on purpose — same method bodies, same helper-struct shapes
+(`SeqRefDeserializer`/`MapRefDeserializer`/`EnumRefDeserializer`/
+`MapKeyDeserializer`/`MapKeySerializer`), adapted to `Node`/`Value`/`Entry`
+instead of `serde_json::Value`/`Map`. `ParseError` grew `impl
+serde::de::Error` and `impl serde::ser::Error` (both just `fn custom`) to
+serve as both layers' `Error` type. Numbers reuse `itoa`/`zmij` (already
+crate dependencies, used the same way in `ser.rs`) to format `Number::raw`
+from typed integers/floats, rather than a third number-formatting
+implementation.
+
+Two entry points, added on `Document`:
+
+```rust
+// Schicht 2: read a parsed (and possibly hand-edited) document into a
+// typed value, without ever constructing a plain serde_json::Value.
+let doc = document::parse(&text)?;
+let cfg: Config = doc.deserialize()?;
+
+// Schicht 3: the reverse -- build a fresh Document straight from a
+// typed value (default Style, no comments -- there's no source to take
+// either from).
+let doc = document::Document::from_serialize(&cfg)?;
+let text = doc.to_cson_string();
+```
+
+`document::to_node::<T>(&value)` is also public, for producing a bare
+`Node<'static>` (e.g. to build one field's replacement value by hand
+rather than a whole document).
+
+### What Schicht 2/3 do and don't give you
+
+They give you: reading a `Document` straight into `T` (Schicht 2), and
+building a fresh `Document` straight from a `T` (Schicht 3) — both
+without detouring through `serde_json::Value`. `serde_tests.rs` exercises
+structs, nested structs, `Vec`, `Option`, externally-tagged enums (unit,
+newtype, and struct variants), `BTreeMap`, and error propagation for a
+shape mismatch, plus the specific round trip `struct -> Document ->
+text -> Document -> struct` staying equal, and re-writing that reparsed
+document being a fixpoint (same as the Schicht 1 invariant).
+
+They do **not** give you `Document::merge_from` (still not implemented).
+Concretely: if you `doc.deserialize::<Config>()`, mutate one field of
+`cfg`, and want to write the change back into `doc` — keeping every
+comment and every *other* field's exact source formatting — Schicht 2/3
+alone don't get you there. `Document::from_serialize(&cfg)` builds a
+**brand new** tree with **no** comments and a **freshly defaulted**
+`Style`; substituting it for `doc.root` would silently discard every
+comment `doc` had. The only thing that could safely stand in for
+`merge_from` today is manually finding the one `Node` you changed (via
+`doc.root_mut()` and matching down through `Value::Object`/`Array` by
+hand) and overwriting just that node's `value` — which is exactly the
+tedious, error-prone, whole-document-structural-knowledge-required process
+`merge_from` exists to automate (per `CLAUDE.md`: object/array diffing by
+key/position, `value`-only overwrites so a changed node's `prefix` survives,
+a `value_eq` that ignores trivia, numeric rather than textual equality for
+numbers). None of that diffing exists yet — building it is the next step,
+not a byproduct of already having a Deserializer and a Serializer.
 
 ## Known, accepted precision losses
 

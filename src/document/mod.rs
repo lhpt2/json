@@ -7,19 +7,25 @@
 //! `Deserializer`/`Serializer` layers must be built on top of this, not the
 //! other way around.
 //!
-//! This is Schicht 1 (+ the style/writer step) of the architecture
-//! described in `CLAUDE.md`; layers 2 and 3 (`serde` integration and
-//! `merge_from`) build on top of it later, so most getters here are
-//! deliberately minimal rather than a full editing API.
+//! This is Schicht 1 (+ the style/writer step), Schicht 2
+//! (`impl serde::Deserializer for &Node`, in `de.rs`) and Schicht 3
+//! (`impl serde::Serializer with Ok = Node`, in `ser.rs`) of the
+//! architecture described in `CLAUDE.md`. `merge_from` -- diffing a
+//! freshly `Serialize`d tree against an existing, comment-carrying one --
+//! is not implemented yet; see those two modules' doc comments for why
+//! that's a separate, later step and not just "call both of these."
 
 #![allow(missing_docs)]
 
+mod de;
 mod lexer;
 mod parser;
+mod ser;
 mod style;
 mod trivia;
 mod writer;
 
+pub use ser::{to_node, Serializer};
 pub use style::{Indent, IndentChar, KeyStyle, Quote, Separator, Style};
 
 use alloc::borrow::Cow;
@@ -194,6 +200,31 @@ impl<'a> Document<'a> {
     pub fn set_style(&mut self, style: Style) {
         self.style = style;
     }
+
+    /// Schicht 2: deserialize the root node into a typed Rust value,
+    /// without going through `T`'s usual text round trip (so a later
+    /// `Document::from_serialize` + diff -- `merge_from`, not yet
+    /// implemented -- could in principle still see this document's
+    /// comments). See `de.rs`.
+    pub fn deserialize<'de, T>(&'de self) -> ParseResult<T>
+    where
+        T: serde::de::Deserialize<'de>,
+    {
+        T::deserialize(self.root())
+    }
+}
+
+impl Document<'static> {
+    /// Schicht 3: serialize a typed Rust value into a fresh `Document`
+    /// (default `Style`, no comments -- there is no source layout to
+    /// take one from). See `ser.rs`.
+    pub fn from_serialize<T>(value: &T) -> ParseResult<Self>
+    where
+        T: ?Sized + serde::ser::Serialize,
+    {
+        let root = tri!(ser::to_node(value));
+        Ok(Document { root, suffix: Cow::Borrowed(""), bare_root: false, style: Style::default() })
+    }
 }
 
 /// Parse a CSON document from text, preserving comments for a later write.
@@ -214,5 +245,7 @@ impl<'a> Document<'a> {
     }
 }
 
+#[cfg(test)]
+mod serde_tests;
 #[cfg(test)]
 mod tests;
