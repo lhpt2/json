@@ -646,6 +646,44 @@ fn test_verbatim_strings() {
     )]);
 }
 
+fn pretty_with(
+    formatter: serde_json::ser::PrettyFormatter,
+    value: &Value,
+) -> String {
+    let mut writer = Vec::new();
+    let mut ser = serde_json::ser::Serializer::with_formatter(&mut writer, formatter);
+    serde::Serialize::serialize(value, &mut ser).unwrap();
+    String::from_utf8(writer).unwrap()
+}
+
+#[test]
+fn test_pretty_formatter_separator_is_configurable() {
+    let obj = json!({"a": 1});
+
+    // Default stays `=`, unchanged from before this was configurable.
+    assert_eq!(pretty_with(serde_json::ser::PrettyFormatter::new(), &obj), "a = 1");
+
+    let colon = serde_json::ser::PrettyFormatter::new()
+        .with_separator(serde_json::document::Separator::Colon);
+    assert_eq!(pretty_with(colon, &obj), "a: 1");
+}
+
+#[test]
+fn test_pretty_formatter_quote_is_configurable() {
+    let obj = json!({"a": "it's a \"test\""});
+
+    // Default stays `"`, unchanged from before this was configurable.
+    assert_eq!(
+        pretty_with(serde_json::ser::PrettyFormatter::new(), &obj),
+        r#"a = "it's a \"test\"""#
+    );
+
+    let single = serde_json::ser::PrettyFormatter::new()
+        .with_quote(serde_json::document::Quote::Single);
+    // The active quote (') gets escaped; `"` no longer needs to be.
+    assert_eq!(pretty_with(single, &obj), r#"a = 'it\'s a "test"'"#);
+}
+
 #[test]
 fn test_write_tuple() {
     test_encode_ok(&[((5,), "[5]")]);

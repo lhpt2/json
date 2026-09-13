@@ -1565,6 +1565,14 @@ pub trait Formatter {
         false
     }
 
+    /// The byte used to quote string values: `b'"'` or, for CSON,
+    /// optionally `b'\''`. Defaults to `"`; [`PrettyFormatter`] exposes
+    /// [`PrettyFormatter::with_quote`] to change it.
+    #[inline]
+    fn quote_char(&self) -> u8 {
+        b'"'
+    }
+
     /// Writes a `null` value to the specified writer.
     #[inline]
     fn write_null<W>(&mut self, writer: &mut W) -> io::Result<()>
@@ -1758,13 +1766,14 @@ pub trait Formatter {
     }
 
     /// Called before each series of `write_string_fragment` and
-    /// `write_char_escape`.  Writes a `"` to the specified writer.
+    /// `write_char_escape`.  Writes the active [`Formatter::quote_char`]
+    /// to the specified writer.
     #[inline]
     fn begin_string<W>(&mut self, writer: &mut W) -> io::Result<()>
     where
         W: ?Sized + io::Write,
     {
-        writer.write_all(b"\"")
+        writer.write_all(&[self.quote_char()])
     }
 
     /// Called before verbatim (multiline) string is serialized in Serializer
@@ -1788,13 +1797,14 @@ pub trait Formatter {
     }
 
     /// Called after each series of `write_string_fragment` and
-    /// `write_char_escape`.  Writes a `"` to the specified writer.
+    /// `write_char_escape`.  Writes the active [`Formatter::quote_char`]
+    /// to the specified writer.
     #[inline]
     fn end_string<W>(&mut self, writer: &mut W) -> io::Result<()>
     where
         W: ?Sized + io::Write,
     {
-        writer.write_all(b"\"")
+        writer.write_all(&[self.quote_char()])
     }
 
     /// Writes a string fragment that doesn't need any escaping to the
@@ -1816,7 +1826,7 @@ pub trait Formatter {
         use self::CharEscape::*;
 
         let escape_char = match char_escape {
-            Quote => b'"',
+            Quote => self.quote_char(),
             ReverseSolidus => b'\\',
             Solidus => b'/',
             Backspace => b'b',
@@ -1996,6 +2006,7 @@ pub struct PrettyFormatter<'a> {
     is_key: bool,
     is_inside_array: bool,
     use_eqsign: bool,
+    quote: u8,
     indent: &'a [u8],
 }
 
@@ -2015,8 +2026,39 @@ impl<'a> PrettyFormatter<'a> {
             is_key: false,
             is_inside_array: false,
             use_eqsign: true,
+            quote: b'"',
             indent,
         }
+    }
+
+    /// Choose the key/value separator: `:` or `=` (the default, matching
+    /// this formatter's prior, non-configurable behavior).
+    ///
+    /// ```
+    /// # use serde_json::ser::PrettyFormatter;
+    /// # use serde_json::document::Separator;
+    /// let formatter = PrettyFormatter::new().with_separator(Separator::Colon);
+    /// ```
+    pub fn with_separator(mut self, separator: crate::document::Separator) -> Self {
+        self.use_eqsign = matches!(separator, crate::document::Separator::Equals);
+        self
+    }
+
+    /// Choose the quote character used for string values and keys: `"`
+    /// (the default, matching this formatter's prior, non-configurable
+    /// behavior) or `'`.
+    ///
+    /// ```
+    /// # use serde_json::ser::PrettyFormatter;
+    /// # use serde_json::document::Quote;
+    /// let formatter = PrettyFormatter::new().with_quote(Quote::Single);
+    /// ```
+    pub fn with_quote(mut self, quote: crate::document::Quote) -> Self {
+        self.quote = match quote {
+            crate::document::Quote::Double => b'"',
+            crate::document::Quote::Single => b'\'',
+        };
+        self
     }
 }
 
@@ -2038,11 +2080,16 @@ impl<'a> Formatter for PrettyFormatter<'a> {
     }
 
     #[inline]
+    fn quote_char(&self) -> u8 {
+        self.quote
+    }
+
+    #[inline]
     fn begin_string<W>(&mut self, writer: &mut W) -> io::Result<()>
     where
         W: ?Sized + io::Write,
     {
-        writer.write_all(b"\"")
+        writer.write_all(&[self.quote])
     }
 
     #[inline]
@@ -2077,7 +2124,7 @@ impl<'a> Formatter for PrettyFormatter<'a> {
     where
         W: ?Sized + io::Write,
     {
-        writer.write_all(b"\"")
+        writer.write_all(&[self.quote])
     }
 
     #[inline]
@@ -2269,6 +2316,7 @@ where
     W: ?Sized + io::Write,
     F: ?Sized + Formatter,
 {
+    let quote = formatter.quote_char();
     let mut bytes = value.as_bytes();
 
     let mut i = 0;
@@ -2276,7 +2324,7 @@ where
         let (string_run, rest) = bytes.split_at(i);
         let (&byte, rest) = rest.split_first().unwrap();
 
-        let escape = ESCAPE[byte as usize];
+        let escape = escape_byte(byte, quote);
 
         i += 1;
         if escape == 0 {
@@ -2347,6 +2395,25 @@ static ESCAPE: [u8; 256] = [
     __, __, __, __, __, __, __, __, __, __, __, __, __, __, __, __, // E
     __, __, __, __, __, __, __, __, __, __, __, __, __, __, __, __, // F
 ];
+
+/// Looks up how `byte` should be escaped, given the currently active
+/// quote character (`"` or, for CSON, `'`). The static `ESCAPE` table
+/// above is fixed to `"`-quoting; this corrects it both ways for `'`:
+/// the active quote byte always needs an escape (whichever one it is),
+/// and `"` stops needing one once it's not the active quote -- a raw `"`
+/// inside `'...'` is valid per the grammar's `squoted-unescaped`
+/// production, so leaving it unescaped there is the minimal, not just a
+/// safe, choice.
+#[inline]
+fn escape_byte(byte: u8, quote: u8) -> u8 {
+    if byte == quote {
+        QU
+    } else if byte == QU {
+        __
+    } else {
+        ESCAPE[byte as usize]
+    }
+}
 
 /// Serialize the given data structure as JSON into the I/O stream.
 ///
