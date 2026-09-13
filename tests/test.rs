@@ -625,6 +625,16 @@ fn test_verbatim_strings() {
     )]);
 
     let obj = json!({
+        "string with longer key": "This one tests very long strings,\nwith multiple lines,\nthat belong to each other."
+    });
+    test_pretty_encode_ok(&[(
+        obj,
+        r#""string with longer key" = |This one tests very long strings,
+                           |with multiple lines,
+                           |that belong to each other.
+"#,
+    )]);
+    let obj = json!({
         "string with longer key": "This one tests\\nvery long strings,\nwith multiple lines,\nthat belong to each other."
     });
     test_pretty_encode_ok(&[(
