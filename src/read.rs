@@ -880,6 +880,10 @@ fn parse_escape<'de, R: Read<'de>>(
 
     match ch {
         b'"' => scratch.push(b'"'),
+        // CSON extends JSON's escape table with `\'`, valid in both quote
+        // styles per the grammar's `escaped` production (not just inside
+        // apostrophe strings).
+        b'\'' => scratch.push(b'\''),
         b'\\' => scratch.push(b'\\'),
         b'/' => scratch.push(b'/'),
         b'b' => scratch.push(b'\x08'),

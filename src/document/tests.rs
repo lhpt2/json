@@ -372,3 +372,38 @@ fn number_equality_ignores_literal_formatting() {
     let b = Number { raw: "1.5".into() };
     assert!(a.numeric_eq(&b));
 }
+
+#[test]
+fn leading_zero_followed_by_digit_is_rejected() {
+    assert!(parse("{\"a\": 01}").is_err());
+}
+
+#[test]
+fn apostrophe_escape_works_in_both_quote_styles() {
+    let doc = parse(r#"{"a": "it\'s", "b": 'it\'s'}"#).unwrap();
+    if let Value::Object { entries, .. } = &doc.root().value {
+        for e in entries {
+            match &e.value().value {
+                Value::Str(s) => assert_eq!(s.as_str(), "it's"),
+                _ => panic!("expected string"),
+            }
+        }
+    } else {
+        panic!("expected object root");
+    }
+}
+
+#[test]
+fn double_quoted_strings_share_the_legacy_read_path() {
+    // \u escape + surrogate pair, decoded via crate::read::StrRead --
+    // exercises the exact code the legacy Value-based deserializer uses.
+    let doc = parse(r#"{"a": "😀"}"#).unwrap();
+    if let Value::Object { entries, .. } = &doc.root().value {
+        match &entries[0].value().value {
+            Value::Str(s) => assert_eq!(s.as_str(), "\u{1f600}"),
+            _ => panic!("expected string"),
+        }
+    } else {
+        panic!("expected object root");
+    }
+}

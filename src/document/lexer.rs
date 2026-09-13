@@ -163,6 +163,20 @@ pub fn lex(input: &str) -> ParseResult<Vec<Item<'_>>> {
     Ok(items)
 }
 
+/// Scans a number literal's raw span (never its value -- see
+/// `Number::raw`'s doc comment on why the text must survive intact).
+///
+/// This grammar walk (int, optional frac, optional exp) is deliberately
+/// the same state machine as de.rs's `scan_integer`/`scan_decimal`/
+/// `scan_exponent` chain (the `arbitrary_precision`-gated one, since
+/// that's the one that also captures raw text instead of computing a
+/// value). It isn't literally the same function because that chain reads
+/// through the streaming `Read` trait one byte at a time -- required so
+/// it also works over `io::Read` sources -- whereas `document::parse`
+/// always has the whole input materialized as one `&str` and can scan
+/// its bytes directly; forcing one function to serve both access
+/// patterns would cost more in generic-abstraction complexity than it
+/// saves in dedup. Keep the two in sync if the number grammar changes.
 fn lex_number(input: &str, start: usize) -> ParseResult<(&str, usize)> {
     let bytes = input.as_bytes();
     let mut i = start;
@@ -171,6 +185,11 @@ fn lex_number(input: &str, start: usize) -> ParseResult<(&str, usize)> {
     }
     if bytes.get(i) == Some(&b'0') {
         i += 1;
+        // "01" is invalid: a leading zero may not be followed by another
+        // digit (matches scan_integer's `b'0'` arm in de.rs).
+        if matches!(bytes.get(i), Some(b'0'..=b'9')) {
+            return Err(err_at(input, i, "a leading zero must not be followed by another digit".into()));
+        }
     } else if matches!(bytes.get(i), Some(b'1'..=b'9')) {
         i += 1;
         while matches!(bytes.get(i), Some(b'0'..=b'9')) {
@@ -222,6 +241,45 @@ fn lex_bare(input: &str, start: usize) -> ParseResult<(&str, usize)> {
 }
 
 fn lex_string(input: &str, start: usize, quote: u8) -> ParseResult<(Cow<'_, str>, usize)> {
+    if quote == b'"' {
+        lex_double_quoted(input, start)
+    } else {
+        lex_single_quoted(input, start, quote)
+    }
+}
+
+/// Double-quoted CSON strings are byte-for-byte JSON strings -- the
+/// grammar's `escaped` production only adds `\'`, which
+/// `read::parse_escape` now also accepts -- so this reuses
+/// `crate::read::StrRead`, the exact escape- and surrogate-pair-decoding
+/// code the legacy `serde::Deserializer` path runs, instead of a second,
+/// independently written unescaper. Per `CLAUDE.md`: string-unescaping is
+/// meant to be taken from serde_json, not reinvented.
+fn lex_double_quoted(input: &str, start: usize) -> ParseResult<(Cow<'_, str>, usize)> {
+    use crate::read::{Read as _, Reference};
+
+    let body = &input[start + 1..];
+    let mut reader = crate::read::StrRead::new(body);
+    let mut scratch = Vec::new();
+    let value = match reader.parse_str(&mut scratch) {
+        Ok(Reference::Borrowed(s)) => Cow::Borrowed(s),
+        Ok(Reference::Copied(s)) => Cow::Owned(String::from(s)),
+        Err(e) => {
+            return Err(err_at(input, start, alloc::string::ToString::to_string(&e)));
+        }
+    };
+    let consumed = reader.byte_offset();
+    Ok((value, start + 1 + consumed))
+}
+
+/// Apostrophe-quoted strings are CSON-only, so there is no existing
+/// `Read` impl to delegate to (the shared one hardcodes `"` as the
+/// terminator in a SIMD-ish hot path across four sealed impls -- not
+/// worth forking for this session). This mirrors
+/// `read::parse_escape`/`parse_unicode_escape`'s escape table and
+/// surrogate-pair handling by hand; keep the two in sync if that grammar
+/// ever changes.
+fn lex_single_quoted(input: &str, start: usize, quote: u8) -> ParseResult<(Cow<'_, str>, usize)> {
     let bytes = input.as_bytes();
     let mut i = start + 1;
     let content_start = i;
