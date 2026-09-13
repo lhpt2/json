@@ -420,6 +420,7 @@ macro_rules! tri {
 mod macros;
 
 pub mod de;
+pub mod document;
 pub mod error;
 pub mod map;
 #[cfg(feature = "std")]

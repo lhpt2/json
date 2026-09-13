@@ -2102,7 +2102,7 @@ impl<'de, 'a, R: Read<'de> + 'a> de::EnumAccess<'de> for VariantAccess<'a, R> {
     where
         V: de::DeserializeSeed<'de>,
     {
-        match tri!(self.de.parse_whitespace()) {
+        match tri!(self.de.parse_whitespace(true)) {
             Some(b'"') => {}
             Some(b'}') => return Err(self.de.peek_error(ErrorCode::ExpectedSomeValue)),
             Some(_) => return Err(self.de.peek_error(ErrorCode::KeyMustBeAString)),
