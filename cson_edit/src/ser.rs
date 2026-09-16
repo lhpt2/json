@@ -42,8 +42,10 @@ fn number_node(raw: String) -> Node<'static> {
 
 /// Serialize `value` into a fresh, comment-free [`Node`]`<'static>`.
 ///
-/// Analogous to [`crate::to_value`], but producing this module's tree
-/// instead of `serde_json::Value`.
+/// Lower-level than [`crate::to_string`]/[`crate::Document::from_serialize`]
+/// (which both call this): use it directly when you only need a bare
+/// value, e.g. to build one field's replacement by hand rather than a
+/// whole document.
 pub fn to_node<T>(value: &T) -> Result<Node<'static>, ParseError>
 where
     T: ?Sized + Serialize,

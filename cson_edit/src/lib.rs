@@ -75,7 +75,7 @@
 //! ```
 
 #![no_std]
-#![allow(missing_docs)]
+#![deny(missing_docs)]
 
 extern crate alloc;
 
@@ -133,24 +133,41 @@ pub struct Node<'a> {
     pub(crate) value: Value<'a>,
 }
 
+/// A CSON value: what [`Node::value`] holds, once its trivia (comments,
+/// whitespace) has been set aside.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value<'a> {
+    /// `null`.
     Null,
+    /// `true` or `false`.
     Bool(bool),
+    /// Any numeric literal, kept as raw text -- see [`Number`].
     Number(Number<'a>),
+    /// Any string, regardless of how it was quoted in the source (or
+    /// will be quoted on write) -- see [`CsonStr`].
     Str(CsonStr<'a>),
+    /// `[ ... ]`.
     Array {
+        /// The array's elements, in source (or insertion) order.
         items: Vec<Node<'a>>,
         /// Trivia before the closing `]`.
         trailing: Cow<'a, str>,
     },
+    /// `{ ... }`, or a bare (brace-less) top-level document.
     Object {
+        /// The object's key/value pairs, in source (or insertion) order.
+        /// Duplicate keys are preserved as separate entries, not merged.
         entries: Vec<Entry<'a>>,
         /// Trivia before the closing `}`.
         trailing: Cow<'a, str>,
     },
 }
 
+/// One `key: value` (or `key = value`) pair inside an [`Value::Object`].
+///
+/// The key is a full [`Node`], not a bare string, so a comment
+/// immediately before the key (rather than before the whole entry) has
+/// somewhere to live.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Entry<'a> {
     pub(crate) key: Node<'a>,
@@ -165,6 +182,15 @@ pub struct CsonStr<'a> {
 }
 
 impl<'a> CsonStr<'a> {
+    /// Builds a string value from `s`. Always valid -- any content is
+    /// fine, since the writer quotes and escapes it as needed -- so
+    /// this is the recommended way to build a [`Value::Str`] by hand
+    /// (`Value::Str(CsonStr::new("hello"))`).
+    pub fn new<S: Into<Cow<'a, str>>>(s: S) -> Self {
+        CsonStr { value: s.into() }
+    }
+
+    /// The decoded string content (escapes already resolved).
     pub fn as_str(&self) -> &str {
         &self.value
     }
@@ -178,6 +204,8 @@ pub struct Number<'a> {
 }
 
 impl<'a> Number<'a> {
+    /// The number's literal text, exactly as it appeared in the source
+    /// (or was formatted on write) -- e.g. `"1.50"`, not `"1.5"`.
     pub fn as_str(&self) -> &str {
         &self.raw
     }
@@ -195,11 +223,20 @@ impl<'a> Number<'a> {
     }
 }
 
-/// Error produced while parsing a CSON document.
+/// Error produced while parsing or (de)serializing a CSON document.
+///
+/// Used both for genuine syntax errors (in which case `line`/`column`
+/// point at the offending byte, 1-indexed) and for `serde`
+/// (de)serialization errors raised via `serde::de::Error::custom`/
+/// `serde::ser::Error::custom` (in which case `line`/`column` are `0`,
+/// since those don't correspond to a specific position in a document).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParseError {
+    /// Human-readable description of what went wrong.
     pub message: String,
+    /// 1-indexed source line, or `0` if not applicable (see above).
     pub line: usize,
+    /// 1-indexed source column, or `0` if not applicable (see above).
     pub column: usize,
 }
 
@@ -212,13 +249,46 @@ impl fmt::Display for ParseError {
 #[cfg(feature = "std")]
 impl std::error::Error for ParseError {}
 
+/// Shorthand for `Result<T, ParseError>`, used throughout this crate's
+/// public API.
 pub type ParseResult<T> = Result<T, ParseError>;
 
 impl<'a> Node<'a> {
+    /// Builds a new node with an empty prefix (no comment) around
+    /// `value`.
+    pub fn new(value: Value<'a>) -> Self {
+        Node { prefix: Cow::Borrowed(""), value }
+    }
+
+    /// This node's value.
     pub fn value(&self) -> &Value<'a> {
         &self.value
     }
 
+    /// Mutable access to this node's value -- e.g. `match
+    /// node.value_mut() { Value::Object { entries, .. } => ..., ... }`
+    /// to reach into a nested structure. The node's `prefix` (and thus
+    /// any comment attached to it) is untouched by mutating through
+    /// this reference, which is exactly what makes it possible to
+    /// change a value without losing the comment above it -- see the
+    /// crate documentation's editing example.
+    pub fn value_mut(&mut self) -> &mut Value<'a> {
+        &mut self.value
+    }
+
+    /// Replaces this node's value, keeping its existing `prefix` (and
+    /// thus any comment attached to it) untouched.
+    pub fn set_value(&mut self, value: Value<'a>) {
+        self.value = value;
+    }
+
+    /// Discards this node's prefix and returns its value.
+    pub fn into_value(self) -> Value<'a> {
+        self.value
+    }
+
+    /// The raw whitespace/comment text preceding this node in the
+    /// source (or set via [`Node::set_prefix`]).
     pub fn prefix(&self) -> &str {
         &self.prefix
     }
@@ -238,14 +308,34 @@ impl<'a> Node<'a> {
 }
 
 impl<'a> Entry<'a> {
+    /// This entry's key, as a full node (so a comment before the key
+    /// has a prefix slot to live in).
     pub fn key(&self) -> &Node<'a> {
         &self.key
     }
 
+    /// Mutable access to this entry's key node -- e.g. to rename a key
+    /// in place (`entry.key_mut().set_value(...)`) while keeping any
+    /// comment attached to it.
+    pub fn key_mut(&mut self) -> &mut Node<'a> {
+        &mut self.key
+    }
+
+    /// This entry's value.
     pub fn value(&self) -> &Node<'a> {
         &self.value
     }
 
+    /// Mutable access to this entry's value node -- the way to change
+    /// one field's value while leaving its comment, and every other
+    /// entry, untouched. See the crate documentation's editing example.
+    pub fn value_mut(&mut self) -> &mut Node<'a> {
+        &mut self.value
+    }
+
+    /// The key's text, if it's a string (which, for a well-formed
+    /// [`Document`], it always is -- object keys are never anything
+    /// else).
     pub fn key_str(&self) -> Option<&str> {
         match &self.key.value {
             Value::Str(s) => Some(s.as_str()),
@@ -254,27 +344,62 @@ impl<'a> Entry<'a> {
     }
 }
 
+impl Value<'static> {
+    /// Builds a value from any `Serialize` type, via the same Schicht 3
+    /// machinery [`crate::to_node`]/[`Document::from_serialize`] use.
+    ///
+    /// This is the recommended way to build a replacement
+    /// [`Value::Number`] by hand (there's no public raw-literal
+    /// constructor for `Number`, since a hand-written literal could be
+    /// syntactically invalid CSON and there would be nothing to catch
+    /// that until write time): `Value::from_serialize(&42i64)?` always
+    /// produces a valid one. It works equally well for whole nested
+    /// structures, e.g. `Value::from_serialize(&my_struct)?`.
+    pub fn from_serialize<T>(value: &T) -> ParseResult<Self>
+    where
+        T: ?Sized + Serialize,
+    {
+        Ok(ser::to_node(value)?.into_value())
+    }
+}
+
 impl<'a> Document<'a> {
+    /// The document's root node (an object, or an array for a
+    /// braced/bracketed top level -- see [`Document::bare_root`]).
     pub fn root(&self) -> &Node<'a> {
         &self.root
     }
 
+    /// Mutable access to the root node, for hand-editing a value while
+    /// keeping every other node's `prefix` (and thus every comment)
+    /// intact. See the crate documentation's editing example.
     pub fn root_mut(&mut self) -> &mut Node<'a> {
         &mut self.root
     }
 
+    /// Trivia (whitespace/comments) after the last token, up to end of
+    /// file -- e.g. a trailing `# note` with nothing after it.
     pub fn suffix(&self) -> &str {
         &self.suffix
     }
 
+    /// Whether the source omitted the outer `{` `}` (a bare object
+    /// root, `ws object-items` in the grammar). Never `true` for an
+    /// array: CSON only allows a bare root for objects.
     pub fn bare_root(&self) -> bool {
         self.bare_root
     }
 
+    /// The layout choices [`Document::to_cson_string`] renders with.
+    /// Detected first-match from the source by [`parse`], or
+    /// [`Style::default`] for a document built via
+    /// [`Document::from_serialize`].
     pub fn style(&self) -> &Style {
         &self.style
     }
 
+    /// Override this document's [`Style`] -- e.g. to force a particular
+    /// separator or quote character regardless of what the source used.
     pub fn set_style(&mut self, style: Style) {
         self.style = style;
     }

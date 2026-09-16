@@ -96,6 +96,22 @@ println!("{}", fresh.to_cson_string());
 # Ok::<(), cson_edit::ParseError>(())
 ```
 
+## Examples
+
+`examples/` has four runnable, commented programs, each `cargo run
+--example NAME` away, and `docs/USAGE.md` walks through them in the
+order you're likely to need them:
+
+* `01_typed_read_write.rs` — the five/seven top-level functions
+  (`from_str`/`to_string`/…), for when comments don't matter.
+* `02_parse_and_inspect.rs` — parsing into a `Document` and walking its
+  tree by hand, read-only.
+* `03_edit_preserving_comments.rs` — the crate's actual reason to
+  exist: change one value, write the document back out, keep every
+  comment. Uses the `Node`/`Entry` mutation API described below.
+* `04_custom_style.rs` — reading the `Style` `parse` detected and
+  overriding it before writing.
+
 ## Module layout
 
 ```
@@ -326,8 +342,13 @@ alone don't get you there. `Document::from_serialize(&cfg)` builds a
 comment `doc` had. The only thing that could safely stand in for
 `merge_from` today is manually finding the one `Node` you changed (via
 `doc.root_mut()` and matching down through `Value::Object`/`Array` by
-hand) and overwriting just that node's `value` — which is exactly the
-tedious, error-prone, whole-document-structural-knowledge-required
+hand) and overwriting just that node's `value` — via `Node::value_mut`/
+`set_value` and `Entry::key_mut`/`value_mut`, building the replacement
+`Value` itself with `Value::from_serialize` (which runs it through this
+same Schicht 3 machinery) rather than constructing a `Value` variant by
+hand. See `examples/03_edit_preserving_comments.rs` and
+`docs/USAGE.md` for the pattern end to end. It's exactly the tedious,
+error-prone, whole-document-structural-knowledge-required
 process `merge_from` exists to automate (object/array diffing by
 key/position, `value`-only overwrites so a changed node's `prefix`
 survives, an equality check that ignores trivia, numeric rather than

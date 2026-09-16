@@ -126,10 +126,13 @@ fn write_array(out: &mut String, items: &[Node<'_>], trailing: &str, depth: usiz
     out.push(']');
 }
 
+/// Writes just the separator character(s), with no trailing space --
+/// the space (or comment-forced line break) between the separator and
+/// the value is [`write_soft`]'s job, not this one's.
 fn write_separator(out: &mut String, style: &Style) {
     match style.separator() {
-        Separator::Colon => out.push_str(": "),
-        Separator::Equals => out.push_str(" = "),
+        Separator::Colon => out.push(':'),
+        Separator::Equals => out.push_str(" ="),
     }
 }
 
