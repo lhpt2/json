@@ -25,17 +25,20 @@ dedicated place to keep trivia. That's what this crate is.
 ## Status
 
 Implemented: **Schicht 1** (lexer → comment-reattachment pass → parser →
-style-detection → writer) and, on top of it, **Schicht 2**
+style-detection → writer); on top of it, **Schicht 2**
 (`impl serde::Deserializer for &Node`, in `de.rs`) and **Schicht 3**
-(`impl serde::Serializer with Ok = Node`, in `ser.rs`).
-
-Not implemented yet: **`merge_from`** — diffing a freshly `Serialize`d
-tree against an existing, comment-carrying one, so a typed edit only
-touches the fields that actually changed and every other node (and its
-comments) is left alone. That's a genuinely separate step from "having
-both a Deserializer and a Serializer" — see "What Schicht 2/3 do and
-don't give you" below for exactly why, since it's a common
+(`impl serde::Serializer with Ok = Node`, in `ser.rs`); and on top of
+*those*, **`Document::merge_from`** (in `merge.rs`) — diffing a freshly
+`Serialize`d tree against an existing, comment-carrying one, so a typed
+edit only touches the fields that actually changed and every other node
+(and its comments) is left alone. That's a genuinely separate step from
+"having both a Deserializer and a Serializer" — see "What Schicht 2/3 do
+and don't give you" below for exactly why, since it's a common
 misconception that the two together already add up to it.
+
+So both editing paths work: hand-editing the tree (`Value::get_mut`/
+`insert`/`remove`, see "Editing" below) and the typed one
+(`deserialize` → mutate your struct → `merge_from`).
 
 ## Quick start
 
@@ -98,7 +101,7 @@ println!("{}", fresh.to_cson_string());
 
 ## Examples
 
-`examples/` has six runnable, commented programs, each `cargo run
+`examples/` has seven runnable, commented programs, each `cargo run
 --example NAME` away, and `docs/USAGE.md` walks through them in the
 order you're likely to need them:
 
@@ -119,6 +122,9 @@ order you're likely to need them:
   by key) and `get_index`/`push`/`remove_index` (arrays, by position);
   `remove`/`remove_index` visibly relocate the removed node's comment
   rather than dropping it, per the deletion rule described below.
+* `07_merge_from_typed.rs` — the typed edit path: `deserialize` into
+  your own struct, change a field, `merge_from` it back into the same
+  document. Comments survive, and an unchanged `1.50` stays `1.50`.
 
 ## Module layout
 
@@ -127,7 +133,7 @@ src/
   lib.rs         data model (Document, Node, Value, Entry, Number,
                  CsonStr), ParseError, the public parse() entry point,
                  Display/to_cson_string(), Document::deserialize/
-                 from_serialize
+                 from_serialize/merge_from
   lexer.rs      text -> flat token/trivia stream
   trivia.rs     the comment line-anchor reattachment pass
   parser.rs     recursive descent: token/trivia stream -> Document tree,
@@ -136,6 +142,8 @@ src/
   writer.rs     Document + Style -> text
   de.rs         Schicht 2: impl serde::Deserializer for &Node
   ser.rs        Schicht 3: impl serde::Serializer with Ok = Node
+  merge.rs      Document::merge_from: diff a fresh Serialize'd tree
+                against an existing, comment-carrying one
   tests.rs      Schicht 1 round-trip invariant tests (#[cfg(test)])
   serde_tests.rs Schicht 2/3 tests (#[cfg(test)])
 ```
@@ -384,33 +392,42 @@ when you call `parse` yourself and keep it alive.
 
 They give you: reading a `Document` straight into `T` (Schicht 2), and
 building a fresh `Document` straight from a `T` (Schicht 3) — both
-without detouring through any intermediate loosely-typed value. They do
-**not** give you `Document::merge_from` (still not implemented).
+without detouring through any intermediate loosely-typed value. What
+they do **not** give you, on their own, is the typed *edit* path.
 Concretely: if you `doc.deserialize::<Config>()`, mutate one field of
 `cfg`, and want to write the change back into `doc` — keeping every
 comment and every *other* field's exact source formatting — Schicht 2/3
 alone don't get you there. `Document::from_serialize(&cfg)` builds a
 **brand new** tree with **no** comments and a **freshly defaulted**
 `Style`; substituting it for `doc.root` would silently discard every
-comment `doc` had. The only thing that could safely stand in for
-`merge_from` today is manually finding the one `Node` you changed (via
-`doc.root_mut()` and `Value::get_mut`/`get_index_mut`, see "Editing:
-`get`/`insert`/`remove`" above) and overwriting just that node's
-`value` — via `Node::value_mut`/`set_value` and `Entry::key_mut`/
-`value_mut`, building the replacement `Value` itself with
-`Value::from_serialize` (which runs it through this same Schicht 3
-machinery) rather than constructing a `Value` variant by hand. See
-`examples/03_edit_preserving_comments.rs` and `docs/USAGE.md` for the
-pattern end to end. It's exactly the tedious, whole-document-
-structural-knowledge-required process `merge_from` exists to automate
-(object/array diffing by key/position, `value`-only overwrites so a
-changed node's `prefix` survives, an equality check that ignores
-trivia, numeric rather than textual equality for numbers) — `get_mut`/
-`insert`/`remove` make locating and changing *one* known node
-straightforward, but `merge_from`'s job is deciding, for a whole tree
-at once, which nodes changed at all. That diffing doesn't exist yet —
-building it is the next step, not a byproduct of already having a
-Deserializer, a Serializer, and per-node editing primitives.
+comment `doc` had.
+
+That's what `merge_from` is for, and why it's its own module
+(`merge.rs`) rather than a byproduct of the other two: it walks the
+fresh tree and the document's tree in parallel and edits the latter in
+place — objects matched by key, arrays by position, only a *changed*
+node's `value` overwritten (never the whole `Node`, or its `prefix`
+would go with it), equality checked blind to trivia, and numbers
+compared numerically rather than textually so a file's `1.50` isn't
+churned into `1.5` on every save. Deletions it decides on go through
+`Value::remove`/`remove_index`, so they migrate comments exactly like a
+hand-written deletion does.
+
+```rust,ignore
+let mut doc = cson_edit::parse(&text)?;
+let mut cfg: Config = doc.deserialize()?;
+cfg.server.port = 9090;
+doc.merge_from(&cfg)?;          // comments and untouched values intact
+fs::write(path, doc.to_cson_string())?;
+```
+
+Two caveats, both documented on `Document::merge_from` itself:
+`#[serde(skip)]`/`skip_serializing_if` fields are indistinguishable
+from deleted keys in the fresh tree, so merging removes them from the
+document; and where a document has duplicate keys, the first is the one
+merged into. Where either matters, edit by hand (`Value::get_mut` +
+`Node::set_value`) instead — see "Editing: `get`/`insert`/`remove`"
+above and `examples/03_edit_preserving_comments.rs`.
 
 ## Known, accepted precision losses
 

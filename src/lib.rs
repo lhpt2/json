@@ -15,10 +15,12 @@
 //! live inside a `serde::Deserializer`'s pull-based interface. `de.rs`'s
 //! doc comment goes into this in more detail.
 //!
-//! `merge_from` — diffing a freshly `Serialize`d tree against an
-//! existing, comment-carrying one so a typed edit only touches the
-//! fields that changed — is not implemented yet; see `ser.rs`'s doc
-//! comment for why Schicht 2 + 3 don't already add up to that.
+//! [`Document::merge_from`] closes the loop on top of those two:
+//! it diffs a freshly `Serialize`d tree against this document and
+//! rewrites only the values that actually changed, so a typed edit
+//! (`deserialize` → mutate → `merge_from`) keeps every comment. See
+//! `merge.rs`, and `ser.rs`'s doc comment for why Schicht 2 + 3 don't
+//! add up to that on their own.
 //!
 //! # Example
 //!
@@ -95,6 +97,7 @@ macro_rules! tri {
 
 mod de;
 mod lexer;
+mod merge;
 mod parser;
 mod ser;
 mod style;
@@ -563,15 +566,93 @@ impl<'a> Document<'a> {
     }
 
     /// Schicht 2: deserialize the root node into a typed Rust value,
-    /// without going through `T`'s usual text round trip (so a later
-    /// `Document::from_serialize` + diff -- `merge_from`, not yet
-    /// implemented -- could in principle still see this document's
-    /// comments). See `de.rs`.
+    /// without going through `T`'s usual text round trip. The document
+    /// is left untouched (and keeps its comments), so the typed value
+    /// can be edited and written back with [`Document::merge_from`].
+    /// See `de.rs`.
     pub fn deserialize<'de, T>(&'de self) -> ParseResult<T>
     where
         T: serde::de::Deserialize<'de>,
     {
         T::deserialize(self.root())
+    }
+
+    /// Writes a typed value back into this document, changing only what
+    /// actually differs and leaving every comment (and every unchanged
+    /// value's exact source text) in place.
+    ///
+    /// This is the other half of [`Document::deserialize`], and the
+    /// reason the two together are more than
+    /// [`Document::from_serialize`]: `from_serialize` builds a **brand
+    /// new** tree, with no comments and a default [`Style`], so using it
+    /// to write an edit back would discard everything this crate exists
+    /// to preserve. `merge_from` instead serializes `value` to a fresh
+    /// tree and *diffs* it against this document:
+    ///
+    /// ```
+    /// use serde::{Deserialize, Serialize};
+    ///
+    /// #[derive(Serialize, Deserialize)]
+    /// struct Config { name: String, port: u16 }
+    ///
+    /// # fn main() -> Result<(), cson_edit::ParseError> {
+    /// let mut doc = cson_edit::parse("name: \"svc\"\nport: 8080  # ops override\n")?;
+    /// let mut cfg: Config = doc.deserialize()?;
+    ///
+    /// cfg.port = 9090;
+    /// doc.merge_from(&cfg)?;
+    ///
+    /// let text = doc.to_cson_string();
+    /// assert!(text.contains("9090"));
+    /// assert!(text.contains("# ops override")); // comment survived
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// The rules, in full:
+    ///
+    /// * **Unchanged scalars are not touched at all.** Numbers are
+    ///   compared numerically rather than textually, so a document's
+    ///   `1.50` isn't rewritten to `1.5` just because that's how the
+    ///   typed value formats; the raw literal is kept whenever the value
+    ///   is unchanged.
+    /// * **Changed scalars** have only their value replaced. The
+    ///   surrounding [`Node`] -- and therefore its `prefix`, where its
+    ///   comment lives -- is never replaced.
+    /// * **Objects**: keys in both are merged recursively, in the
+    ///   document's existing order; keys only in `value` are appended
+    ///   after the existing ones; keys only in the document are removed
+    ///   via [`Value::remove`], so their comments migrate rather than
+    ///   disappear.
+    /// * **Arrays**: elements are merged position by position; extra
+    ///   elements in `value` are appended, extra elements in the
+    ///   document are removed via [`Value::remove_index`] (same comment
+    ///   migration).
+    /// * **A shape change** (a field that was a number is now an
+    ///   object, say) has no meaningful field-by-field diff, so that
+    ///   node's value is replaced wholesale.
+    ///
+    /// Two caveats worth knowing before you rely on it:
+    ///
+    /// * **`#[serde(skip)]` and `skip_serializing_if` interact badly
+    ///   with the "only in the document → remove" rule.** A field that
+    ///   `T` deliberately doesn't serialize is indistinguishable, in the
+    ///   fresh tree, from a key the caller wants gone -- so it will be
+    ///   removed from the document. If `T` skips fields that the file is
+    ///   meant to keep, edit those keys by hand
+    ///   ([`Value::get_mut`]/[`Node::set_value`]) instead of merging.
+    /// * **Duplicate keys**: CSON keeps them (see [`Value::Object`]),
+    ///   but a serialized `T` never has any. The first entry with a
+    ///   given key is the one merged into; later duplicates of that same
+    ///   key are left untouched, matching [`Value::get`]/
+    ///   [`Value::remove`]'s first-match convention.
+    pub fn merge_from<T>(&mut self, value: &T) -> ParseResult<()>
+    where
+        T: ?Sized + Serialize,
+    {
+        let fresh = tri!(ser::to_node(value));
+        merge::merge_value(self.root.value_mut(), fresh.into_value());
+        Ok(())
     }
 }
 

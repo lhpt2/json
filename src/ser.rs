@@ -7,18 +7,17 @@
 //! this is the "typed value -> tree" half of the round trip.
 //!
 //! Combining that fresh tree with an *existing* one's trivia is
-//! `Document::merge_from`'s job, and it is **not** implemented yet.
-//! Having both a `Deserializer` and a `Serializer` does not add up to
-//! `merge_from` by itself: `merge_from` needs a diff (walk both trees in
-//! parallel, match objects by key and arrays by position, and overwrite
-//! only a changed node's `value` -- never the whole `Node`, or its
-//! `prefix` goes with it) plus a trivia-blind equality check (so an
-//! untouched field, even if its formatting differs syntactically, isn't
-//! misdetected as changed) and numeric-not-textual number comparison (so
-//! `1.50` from disk and `1.5` from the struct count as equal). None of
-//! that diffing logic exists yet; `Document::from_serialize` only knows
-//! how to build a tree from scratch, not how to reconcile one against an
-//! existing one.
+//! `Document::merge_from`'s job, in `merge.rs` -- a separate step, not
+//! something having both a `Deserializer` and a `Serializer` adds up to
+//! on its own. It needs a diff (walk both trees in parallel, match
+//! objects by key and arrays by position, and overwrite only a changed
+//! node's `value` -- never the whole `Node`, or its `prefix` goes with
+//! it) plus a trivia-blind equality check (so an untouched field, even
+//! if its formatting differs syntactically, isn't misdetected as
+//! changed) and numeric-not-textual number comparison (so `1.50` from
+//! disk and `1.5` from the struct count as equal). This module only
+//! knows how to build a tree from scratch; `merge.rs` is what reconciles
+//! one against an existing one.
 
 use super::{CsonStr, Entry, Node, Number, ParseError, Value};
 use alloc::borrow::{Cow, ToOwned};

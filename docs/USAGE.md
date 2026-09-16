@@ -15,6 +15,7 @@ cargo run --example 03_edit_preserving_comments
 cargo run --example 04_custom_style
 cargo run --example 05_file_roundtrip
 cargo run --example 06_object_editing_api
+cargo run --example 07_merge_from_typed
 ```
 
 ## Installing
@@ -88,12 +89,12 @@ Full runnable version: `examples/02_parse_and_inspect.rs`.
 
 ## "I want to change one value and keep every comment"
 
-This is what the crate is for. There is no automatic "diff a struct
-against a `Document`" helper yet (`Document::merge_from` — see the
-README's "Status" section), so today this means: find the `Node` you
-want to change, and overwrite **only its `value`**, never the whole
-`Node`. A `Node`'s `prefix` is where its comment lives; replacing the
-`Node` itself throws the comment away along with the old value.
+This is what the crate is for. Two ways to do it: by hand (this
+section) or through your own typed struct (the next one). By hand
+means: find the `Node` you want to change, and overwrite **only its
+`value`**, never the whole `Node`. A `Node`'s `prefix` is where its
+comment lives; replacing the `Node` itself throws the comment away
+along with the old value.
 
 ```rust
 use cson_edit::{parse, Value};
@@ -133,6 +134,59 @@ The API surface this pattern relies on:
 Full runnable version (two edits, nested and top-level, both verified
 by checking the comments and the old value are gone/present as
 expected): `examples/03_edit_preserving_comments.rs`.
+
+## "I want to edit my own struct and write it back, comments intact"
+
+`Document::merge_from` does the tree-walking for you: deserialize the
+document into your type, change it like any other Rust value, then
+merge it back into the *same* document.
+
+```rust
+use serde::{Deserialize, Serialize};
+
+#[derive(Serialize, Deserialize)]
+struct Config { name: String, port: u16 }
+
+let mut doc = cson_edit::parse("name: \"svc\"\nport: 8080  # ops override\n")?;
+
+let mut cfg: Config = doc.deserialize()?;
+cfg.port = 9090;
+doc.merge_from(&cfg)?;
+
+let text = doc.to_cson_string();
+assert!(text.contains("9090"));
+assert!(text.contains("# ops override"));
+# Ok::<(), cson_edit::ParseError>(())
+```
+
+Note what this is *not*: `Document::from_serialize(&cfg)` builds a
+brand new document with no comments at all, so writing that out would
+lose everything. `merge_from` diffs instead — it walks the fresh tree
+and the document together and rewrites only what differs:
+
+* unchanged scalars aren't touched at all, so their comments *and*
+  their exact source text survive — including numbers, which are
+  compared numerically, so a file's `1.50` isn't churned into `1.5`
+  just because that's how your `f64` formats;
+* changed scalars have only their value replaced, never the `Node`
+  around them (which is where the comment lives);
+* objects are matched by key, arrays by position; keys/elements only in
+  your struct get appended, ones only in the document get removed via
+  `Value::remove`/`remove_index` — so even deletions migrate their
+  comments instead of dropping them.
+
+Two things to know before relying on it:
+
+* **`#[serde(skip)]` / `skip_serializing_if` fields get removed from
+  the document.** In the freshly serialized tree they're simply absent,
+  which is indistinguishable from "the caller deleted this key". If
+  your type skips fields the file is meant to keep, edit those keys by
+  hand (previous section) rather than merging.
+* **Duplicate keys**: a serialized struct never has any, but a
+  hand-written document can. The first entry with a given key is the
+  one merged into; later duplicates are left alone.
+
+Full runnable version: `examples/07_merge_from_typed.rs`.
 
 ## "I want to add or delete an entry, not just change a value"
 

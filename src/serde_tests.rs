@@ -224,3 +224,169 @@ fn top_level_from_reader_and_to_writer_round_trip() {
     let cfg2: Address = crate::from_reader(&buf[..]).unwrap();
     assert_eq!(cfg, cfg2);
 }
+
+// ---------------------------------------------------------------------
+// merge_from (see lib.rs's Document::merge_from doc comment)
+// ---------------------------------------------------------------------
+
+#[test]
+fn merge_from_with_an_unchanged_value_changes_nothing() {
+    // The invariant that catches most merge bugs: parse, merge back an
+    // untouched struct, write -- must equal writing without merging at
+    // all, down to the byte.
+    let src = r#"
+# top-level config
+name = "svc"
+server: {
+  # where it listens
+  host: "localhost"
+  port: 8080
+}
+tags: ["a", "b"]
+retries: null
+"#;
+    let baseline = parse(src).unwrap().to_cson_string();
+
+    let mut doc = parse(src).unwrap();
+    let cfg: Config = doc.deserialize().unwrap();
+    doc.merge_from(&cfg).unwrap();
+
+    assert_eq!(doc.to_cson_string(), baseline);
+}
+
+#[test]
+fn merge_from_changes_one_scalar_and_keeps_every_comment() {
+    let src = "# header\nname = \"svc\"\nserver: {\n  host: \"localhost\"\n  # ops override\n  port: 8080\n}\ntags: []\nretries: null\n";
+    let mut doc = parse(src).unwrap();
+    let mut cfg: Config = doc.deserialize().unwrap();
+
+    cfg.server.port = 9090;
+    doc.merge_from(&cfg).unwrap();
+
+    let text = doc.to_cson_string();
+    assert!(text.contains("9090"));
+    assert!(!text.contains("8080"));
+    assert!(text.contains("# header"));
+    assert!(text.contains("# ops override"));
+    // untouched siblings keep their exact text
+    assert!(text.contains("\"localhost\""));
+}
+
+#[test]
+fn merge_from_keeps_the_raw_literal_when_a_number_is_numerically_equal() {
+    #[derive(Serialize, Deserialize)]
+    struct Ratios {
+        a: f64,
+        b: f64,
+    }
+    // 1.50 parses to 1.5; re-serializing the struct would format it as
+    // "1.5", so a textual comparison would rewrite it on every save.
+    let mut doc = parse("a: 1.50\nb: 2.0\n").unwrap();
+    let cfg: Ratios = doc.deserialize().unwrap();
+    doc.merge_from(&cfg).unwrap();
+
+    let text = doc.to_cson_string();
+    assert!(text.contains("1.50"), "raw literal should survive: {text}");
+    assert!(text.contains("2.0"));
+}
+
+#[test]
+fn merge_from_adds_new_keys_and_removes_absent_ones_preserving_comments() {
+    #[derive(Serialize, Deserialize)]
+    struct Before {
+        keep: i32,
+        // about to disappear from the type
+        drop_me: i32,
+    }
+    #[derive(Serialize, Deserialize)]
+    struct After {
+        keep: i32,
+        added: i32,
+    }
+
+    let mut doc = parse("keep: 1\n# about drop_me\ndrop_me: 2\n").unwrap();
+    let _before: Before = doc.deserialize().unwrap();
+
+    doc.merge_from(&After { keep: 1, added: 3 }).unwrap();
+
+    let text = doc.to_cson_string();
+    assert!(text.contains("keep: 1"));
+    assert!(text.contains("added: 3"));
+    // the removed key's comment migrated rather than vanishing (note it
+    // mentions "drop_me", so check the *structure* for the key's absence)
+    assert!(text.contains("# about drop_me"));
+    let reparsed = parse(&text).unwrap();
+    let keys: Vec<&str> = match reparsed.root().value() {
+        Value::Object { entries, .. } => entries.iter().filter_map(|e| e.key_str()).collect(),
+        _ => panic!("expected object"),
+    };
+    assert_eq!(keys, ["keep", "added"]);
+}
+
+#[test]
+fn merge_from_grows_and_shrinks_arrays_positionally() {
+    #[derive(Serialize, Deserialize)]
+    struct Holder {
+        items: Vec<String>,
+    }
+
+    let mut doc = parse("items: [\n  \"a\"\n  # about b\n  \"b\"\n]\n").unwrap();
+
+    // grow
+    doc.merge_from(&Holder {
+        items: vec!["a".to_string(), "b".to_string(), "c".to_string()],
+    })
+    .unwrap();
+    let text = doc.to_cson_string();
+    assert!(text.contains("\"c\""));
+    assert!(text.contains("# about b"));
+
+    // shrink back past the commented element
+    doc.merge_from(&Holder { items: vec!["a".to_string()] }).unwrap();
+    let text = doc.to_cson_string();
+    assert!(text.contains("\"a\""));
+    assert!(!text.contains("\"b\""));
+    assert!(!text.contains("\"c\""));
+    // the dropped element's comment ended up in the array's trailing slot
+    assert!(text.contains("# about b"));
+    parse(&text).unwrap();
+}
+
+#[test]
+fn merge_from_replaces_a_node_whose_shape_changed() {
+    #[derive(Serialize, Deserialize)]
+    struct Scalar {
+        thing: i32,
+    }
+    #[derive(Serialize, Deserialize)]
+    struct Nested {
+        thing: Address,
+    }
+
+    let mut doc = parse("# about thing\nthing: 1\n").unwrap();
+    let _: Scalar = doc.deserialize().unwrap();
+
+    doc.merge_from(&Nested { thing: Address { host: "h".to_string(), port: 1 } }).unwrap();
+
+    let text = doc.to_cson_string();
+    assert!(text.contains("host"));
+    assert!(text.contains("# about thing")); // the Node, and so its prefix, survived
+    parse(&text).unwrap();
+}
+
+#[test]
+fn merge_from_result_stays_a_fixpoint_and_reparses_to_the_merged_value() {
+    let src = "# header\nname = \"svc\"\nserver: { host: \"h\", port: 1 }\ntags: [\"x\"]\nretries: 2\n";
+    let mut doc = parse(src).unwrap();
+    let mut cfg: Config = doc.deserialize().unwrap();
+    cfg.tags.push("y".to_string());
+    cfg.retries = None;
+    doc.merge_from(&cfg).unwrap();
+
+    let a = doc.to_cson_string();
+    let b = parse(&a).unwrap().to_cson_string();
+    assert_eq!(a, b, "invariant 1: fixpoint from the first write on");
+
+    let reparsed: Config = parse(&a).unwrap().deserialize().unwrap();
+    assert_eq!(reparsed, cfg);
+}

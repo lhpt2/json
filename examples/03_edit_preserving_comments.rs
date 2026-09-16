@@ -2,12 +2,12 @@
 //! case): change one value in a document and write it back out with
 //! every comment and every other value's exact formatting untouched.
 //!
-//! There is no automatic "diff a struct against a Document" helper yet
-//! (`Document::merge_from`, see the crate README) -- so this shows the
-//! manual pattern that stands in for it today: find the `Node` you
-//! want to change via `root_mut()`, and overwrite only its *value*
-//! (never the whole `Node`, or its `prefix` -- and thus its comment --
-//! goes with it).
+//! This is the by-hand version: find the `Node` you want to change via
+//! `root_mut()`, and overwrite only its *value* (never the whole
+//! `Node`, or its `prefix` -- and thus its comment -- goes with it).
+//! If you'd rather edit a typed struct and have the diffing done for
+//! you, `Document::merge_from` does exactly this walk automatically --
+//! see 07_merge_from_typed.rs.
 //!
 //! Run with: `cargo run --example 03_edit_preserving_comments`
 
