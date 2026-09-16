@@ -1,412 +1,89 @@
-//! # Serde JSON
+//! `cson_edit` — a CSON parser and editor that preserves comments and
+//! formatting, analogous to [`toml_edit`](https://docs.rs/toml_edit).
 //!
-//! JSON is a ubiquitous open-standard format that uses human-readable text to
-//! transmit data objects consisting of key-value pairs.
+//! This crate is the `Document -> Node` tree originally designed as part
+//! of a CSON-flavored `serde_json` fork: a parse tree that keeps comments
+//! and blank lines around so a configuration file can be edited and
+//! written back without losing them. It was extracted to its own crate
+//! (see the extraction notes in the repository's `docs/` directory) so
+//! it can be depended on independently, the way `toml_edit` is
+//! independent of `serde_json`.
 //!
-//! ```json
-//! {
-//!     "name": "John Doe",
-//!     "age": 43,
-//!     "address": {
-//!         "street": "10 Downing Street",
-//!         "city": "London"
-//!     },
-//!     "phones": [
-//!         "+44 1234567",
-//!         "+44 2345678"
-//!     ]
-//! }
-//! ```
+//! It is intentionally independent from `serde`: `Deserializer`/
+//! `Serializer` (Schicht 2/3, in `de.rs`/`ser.rs`) are built on top of
+//! this tree, not the other way around, because comments have nowhere to
+//! live inside a `serde::Deserializer`'s pull-based interface. `de.rs`'s
+//! doc comment goes into this in more detail.
 //!
-//! There are three common ways that you might find yourself needing to work
-//! with JSON data in Rust.
+//! `merge_from` — diffing a freshly `Serialize`d tree against an
+//! existing, comment-carrying one so a typed edit only touches the
+//! fields that changed — is not implemented yet; see `ser.rs`'s doc
+//! comment for why Schicht 2 + 3 don't already add up to that.
 //!
-//!  - **As text data.** An unprocessed string of JSON data that you receive on
-//!    an HTTP endpoint, read from a file, or prepare to send to a remote
-//!    server.
-//!  - **As an untyped or loosely typed representation.** Maybe you want to
-//!    check that some JSON data is valid before passing it on, but without
-//!    knowing the structure of what it contains. Or you want to do very basic
-//!    manipulations like insert a key in a particular spot.
-//!  - **As a strongly typed Rust data structure.** When you expect all or most
-//!    of your data to conform to a particular structure and want to get real
-//!    work done without JSON's loosey-goosey nature tripping you up.
+//! # Example
 //!
-//! Serde JSON provides efficient, flexible, safe ways of converting data
-//! between each of these representations.
-//!
-//! # Operating on untyped JSON values
-//!
-//! Any valid JSON data can be manipulated in the following recursive enum
-//! representation. This data structure is [`serde_json::Value`][value].
-//!
-//! ```
-//! # use serde_json::{Number, Map};
-//! #
-//! # #[allow(dead_code)]
-//! enum Value {
-//!     Null,
-//!     Bool(bool),
-//!     Number(Number),
-//!     String(String),
-//!     Array(Vec<Value>),
-//!     Object(Map<String, Value>),
-//! }
-//! ```
-//!
-//! A string of JSON data can be parsed into a `serde_json::Value` by the
-//! [`serde_json::from_str`][from_str] function. There is also [`from_slice`]
-//! for parsing from a byte slice `&[u8]` and [`from_reader`] for parsing from
-//! any `io::Read` like a File or a TCP stream.
-//!
-//! ```
-//! use serde_json::{Result, Value};
-//!
-//! fn untyped_example() -> Result<()> {
-//!     // Some JSON input data as a &str. Maybe this comes from the user.
-//!     let data = r#"
-//!         {
-//!             "name": "John Doe",
-//!             "age": 43,
-//!             "phones": [
-//!                 "+44 1234567",
-//!                 "+44 2345678"
-//!             ]
-//!         }"#;
-//!
-//!     // Parse the string of data into serde_json::Value.
-//!     let v: Value = serde_json::from_str(data)?;
-//!
-//!     // Access parts of the data by indexing with square brackets.
-//!     println!("Please call {} at the number {}", v["name"], v["phones"][0]);
-//!
-//!     Ok(())
-//! }
-//! #
-//! # fn main() {
-//! #     untyped_example().unwrap();
-//! # }
-//! ```
-//!
-//! The result of square bracket indexing like `v["name"]` is a borrow of the
-//! data at that index, so the type is `&Value`. A JSON map can be indexed with
-//! string keys, while a JSON array can be indexed with integer keys. If the
-//! type of the data is not right for the type with which it is being indexed,
-//! or if a map does not contain the key being indexed, or if the index into a
-//! vector is out of bounds, the returned element is `Value::Null`.
-//!
-//! When a `Value` is printed, it is printed as a JSON string. So in the code
-//! above, the output looks like `Please call "John Doe" at the number "+44
-//! 1234567"`. The quotation marks appear because `v["name"]` is a `&Value`
-//! containing a JSON string and its JSON representation is `"John Doe"`.
-//! Printing as a plain string without quotation marks involves converting from
-//! a JSON string to a Rust string with [`as_str()`] or avoiding the use of
-//! `Value` as described in the following section.
-//!
-//! [`as_str()`]: crate::Value::as_str
-//!
-//! The `Value` representation is sufficient for very basic tasks but can be
-//! tedious to work with for anything more significant. Error handling is
-//! verbose to implement correctly, for example imagine trying to detect the
-//! presence of unrecognized fields in the input data. The compiler is powerless
-//! to help you when you make a mistake, for example imagine typoing `v["name"]`
-//! as `v["nmae"]` in one of the dozens of places it is used in your code.
-//!
-//! # Parsing JSON as strongly typed data structures
-//!
-//! Serde provides a powerful way of mapping JSON data into Rust data structures
-//! largely automatically.
+//! For plain typed read/write with no need to keep comments around, use
+//! the conventional top-level functions (matching `serde_json`'s /
+//! `serde_yaml`'s own naming):
 //!
 //! ```
 //! use serde::{Deserialize, Serialize};
-//! use serde_json::Result;
 //!
-//! #[derive(Serialize, Deserialize)]
-//! struct Person {
+//! #[derive(Debug, PartialEq, Serialize, Deserialize)]
+//! struct Config {
 //!     name: String,
-//!     age: u8,
-//!     phones: Vec<String>,
+//!     port: u16,
 //! }
 //!
-//! fn typed_example() -> Result<()> {
-//!     // Some JSON input data as a &str. Maybe this comes from the user.
-//!     let data = r#"
-//!         {
-//!             "name": "John Doe",
-//!             "age": 43,
-//!             "phones": [
-//!                 "+44 1234567",
-//!                 "+44 2345678"
-//!             ]
-//!         }"#;
-//!
-//!     // Parse the string of data into a Person object. This is exactly the
-//!     // same function as the one that produced serde_json::Value above, but
-//!     // now we are asking it for a Person as output.
-//!     let p: Person = serde_json::from_str(data)?;
-//!
-//!     // Do things just like with any other Rust data structure.
-//!     println!("Please call {} at the number {}", p.name, p.phones[0]);
-//!
-//!     Ok(())
-//! }
-//! #
-//! # fn main() {
-//! #     typed_example().unwrap();
+//! # fn main() -> Result<(), cson_edit::ParseError> {
+//! let cfg = Config { name: "svc".to_string(), port: 8080 };
+//! let text = cson_edit::to_string(&cfg)?;
+//! let cfg2: Config = cson_edit::from_str(&text)?;
+//! assert_eq!(cfg, cfg2);
+//! # Ok(())
 //! # }
 //! ```
 //!
-//! This is the same `serde_json::from_str` function as before, but this time we
-//! assign the return value to a variable of type `Person` so Serde will
-//! automatically interpret the input data as a `Person` and produce informative
-//! error messages if the layout does not conform to what a `Person` is expected
-//! to look like.
-//!
-//! Any type that implements Serde's `Deserialize` trait can be deserialized
-//! this way. This includes built-in Rust standard library types like `Vec<T>`
-//! and `HashMap<K, V>`, as well as any structs or enums annotated with
-//! `#[derive(Deserialize)]`.
-//!
-//! Once we have `p` of type `Person`, our IDE and the Rust compiler can help us
-//! use it correctly like they do for any other Rust code. The IDE can
-//! autocomplete field names to prevent typos, which was impossible in the
-//! `serde_json::Value` representation. And the Rust compiler can check that
-//! when we write `p.phones[0]`, then `p.phones` is guaranteed to be a
-//! `Vec<String>` so indexing into it makes sense and produces a `String`.
-//!
-//! # Constructing JSON values
-//!
-//! Serde JSON provides a [`json!` macro][macro] to build `serde_json::Value`
-//! objects with very natural JSON syntax.
+//! To keep comments alive across an edit, work with [`Document`]
+//! directly instead:
 //!
 //! ```
-//! use serde_json::json;
-//!
-//! fn main() {
-//!     // The type of `john` is `serde_json::Value`
-//!     let john = json!({
-//!         "name": "John Doe",
-//!         "age": 43,
-//!         "phones": [
-//!             "+44 1234567",
-//!             "+44 2345678"
-//!         ]
-//!     });
-//!
-//!     println!("first phone number: {}", john["phones"][0]);
-//!
-//!     // Convert to a string of JSON and print it out
-//!     println!("{}", john.to_string());
-//! }
-//! ```
-//!
-//! The `Value::to_string()` function converts a `serde_json::Value` into a
-//! `String` of JSON text.
-//!
-//! One neat thing about the `json!` macro is that variables and expressions can
-//! be interpolated directly into the JSON value as you are building it. Serde
-//! will check at compile time that the value you are interpolating is able to
-//! be represented as JSON.
-//!
-//! ```
-//! # use serde_json::json;
-//! #
-//! # fn random_phone() -> u16 { 0 }
-//! #
-//! let full_name = "John Doe";
-//! let age_last_year = 42;
-//!
-//! // The type of `john` is `serde_json::Value`
-//! let john = json!({
-//!     "name": full_name,
-//!     "age": age_last_year + 1,
-//!     "phones": [
-//!         format!("+44 {}", random_phone())
-//!     ]
-//! });
-//! ```
-//!
-//! This is amazingly convenient, but we have the problem we had before with
-//! `Value`: the IDE and Rust compiler cannot help us if we get it wrong. Serde
-//! JSON provides a better way of serializing strongly-typed data structures
-//! into JSON text.
-//!
-//! # Creating JSON by serializing data structures
-//!
-//! A data structure can be converted to a JSON string by
-//! [`serde_json::to_string`][to_string]. There is also
-//! [`serde_json::to_vec`][to_vec] which serializes to a `Vec<u8>` and
-//! [`serde_json::to_writer`][to_writer] which serializes to any `io::Write`
-//! such as a File or a TCP stream.
-//!
-//! ```
+//! use cson_edit::{parse, Document};
 //! use serde::{Deserialize, Serialize};
-//! use serde_json::Result;
 //!
-//! #[derive(Serialize, Deserialize)]
-//! struct Address {
-//!     street: String,
-//!     city: String,
+//! #[derive(Debug, Serialize, Deserialize)]
+//! struct Config {
+//!     name: String,
+//!     port: u16,
 //! }
 //!
-//! fn print_an_address() -> Result<()> {
-//!     // Some data structure.
-//!     let address = Address {
-//!         street: "10 Downing Street".to_owned(),
-//!         city: "London".to_owned(),
-//!     };
+//! # fn main() -> Result<(), cson_edit::ParseError> {
+//! // Read-only structural access, comments intact:
+//! let doc = parse("name = \"svc\"  # prod\nport = 8080\n")?;
+//! println!("{}", doc);
 //!
-//!     // Serialize it to a JSON string.
-//!     let j = serde_json::to_string(&address)?;
+//! // Typed read (Schicht 2) -- the Document you read from still has its
+//! // comments; the struct itself, like any plain Rust struct, does not:
+//! let cfg: Config = doc.deserialize()?;
 //!
-//!     // Print, write to a file, or send to an HTTP server.
-//!     println!("{}", j);
-//!
-//!     Ok(())
-//! }
-//! #
-//! # fn main() {
-//! #     print_an_address().unwrap();
+//! // Typed write (Schicht 3) -- builds a *fresh* tree, no comments,
+//! // default Style, since there's no source layout to take one from:
+//! let fresh = Document::from_serialize(&cfg)?;
+//! println!("{}", fresh.to_cson_string());
+//! # Ok(())
 //! # }
 //! ```
-//!
-//! Any type that implements Serde's `Serialize` trait can be serialized this
-//! way. This includes built-in Rust standard library types like `Vec<T>` and
-//! `HashMap<K, V>`, as well as any structs or enums annotated with
-//! `#[derive(Serialize)]`.
-//!
-//! # No-std support
-//!
-//! As long as there is a memory allocator, it is possible to use serde_json
-//! without the rest of the Rust standard library. Disable the default "std"
-//! feature and enable the "alloc" feature:
-//!
-//! ```toml
-//! [dependencies]
-//! serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
-//! ```
-//!
-//! For JSON support in Serde without a memory allocator, please see the
-//! [`serde-json-core`] crate.
-//!
-//! [value]: crate::value::Value
-//! [from_str]: crate::de::from_str
-//! [from_slice]: crate::de::from_slice
-//! [from_reader]: crate::de::from_reader
-//! [to_string]: crate::ser::to_string
-//! [to_vec]: crate::ser::to_vec
-//! [to_writer]: crate::ser::to_writer
-//! [macro]: crate::json
-//! [`serde-json-core`]: https://github.com/rust-embedded-community/serde-json-core
 
-#![doc(html_root_url = "https://docs.rs/serde_json/1.0.151")]
-// Ignored clippy lints
-#![allow(
-    clippy::collapsible_else_if,
-    clippy::comparison_chain,
-    clippy::deprecated_cfg_attr,
-    clippy::doc_markdown,
-    clippy::elidable_lifetime_names,
-    clippy::excessive_precision,
-    clippy::explicit_auto_deref,
-    clippy::float_cmp,
-    clippy::manual_range_contains,
-    clippy::match_like_matches_macro,
-    clippy::match_single_binding,
-    clippy::needless_doctest_main,
-    clippy::needless_late_init,
-    clippy::needless_lifetimes,
-    clippy::return_self_not_must_use,
-    clippy::transmute_ptr_to_ptr,
-    clippy::unbuffered_bytes,
-    clippy::unconditional_recursion, // https://github.com/rust-lang/rust-clippy/issues/12133
-    clippy::uninlined_format_args,
-    clippy::unnecessary_wraps
-)]
-// Ignored clippy_pedantic lints
-#![allow(
-    // Deserializer::from_str, into_iter
-    clippy::should_implement_trait,
-    // integer and float ser/de requires these sorts of casts
-    clippy::cast_possible_truncation,
-    clippy::cast_possible_wrap,
-    clippy::cast_precision_loss,
-    clippy::cast_sign_loss,
-    // correctly used
-    clippy::enum_glob_use,
-    clippy::if_not_else,
-    clippy::integer_division,
-    clippy::let_underscore_untyped,
-    clippy::map_err_ignore,
-    clippy::match_same_arms,
-    clippy::similar_names,
-    clippy::unused_self,
-    clippy::wildcard_imports,
-    // things are often more readable this way
-    clippy::cast_lossless,
-    clippy::items_after_statements,
-    clippy::module_name_repetitions,
-    clippy::redundant_else,
-    clippy::shadow_unrelated,
-    clippy::single_match_else,
-    clippy::too_many_lines,
-    clippy::unreadable_literal,
-    clippy::unseparated_literal_suffix,
-    clippy::use_self,
-    clippy::zero_prefixed_literal,
-    // we support older compilers
-    clippy::checked_conversions,
-    clippy::mem_replace_with_default,
-    // noisy
-    clippy::missing_errors_doc,
-    clippy::must_use_candidate,
-)]
-// Restrictions
-#![deny(clippy::question_mark_used)]
-#![allow(non_upper_case_globals)]
-#![deny(missing_docs)]
 #![no_std]
-#![cfg_attr(docsrs, feature(doc_cfg))]
-#![allow(unknown_lints, mismatched_lifetime_syntaxes)]
-
-#[cfg(not(any(feature = "std", feature = "alloc")))]
-compile_error! {
-    "serde_json requires that either `std` (default) or `alloc` feature is enabled"
-}
+#![deny(missing_docs)]
 
 extern crate alloc;
 
 #[cfg(feature = "std")]
 extern crate std;
 
-extern crate serde_core as serde;
-
-// Not public API. Used from macro-generated code.
-#[doc(hidden)]
-pub mod __private {
-    #[doc(hidden)]
-    pub use alloc::vec;
-}
-
-#[cfg(feature = "std")]
-#[cfg_attr(docsrs, doc(cfg(feature = "std")))]
-#[doc(inline)]
-pub use crate::de::from_reader;
-#[doc(inline)]
-pub use crate::de::{from_slice, from_str, Deserializer, StreamDeserializer};
-#[doc(inline)]
-pub use crate::error::{Error, Result};
-#[doc(inline)]
-pub use crate::ser::{to_string, to_string_pretty, to_vec, to_vec_pretty};
-#[cfg(feature = "std")]
-#[cfg_attr(docsrs, doc(cfg(feature = "std")))]
-#[doc(inline)]
-pub use crate::ser::{to_writer, to_writer_pretty, Serializer};
-#[doc(inline)]
-pub use crate::value::{from_value, to_value, Map, Number, Value};
-
-// We only use our own error type; no need for From conversions provided by the
-// standard library's try! macro. This reduces lines of LLVM IR by 4%.
+// We only use our own error type; no need for From conversions provided by
+// the standard library's try! macro. This reduces lines of LLVM IR.
 macro_rules! tri {
     ($e:expr $(,)?) => {
         match $e {
@@ -416,26 +93,458 @@ macro_rules! tri {
     };
 }
 
-#[macro_use]
-mod macros;
-
-pub mod de;
-pub mod error;
-pub mod map;
-#[cfg(feature = "std")]
-#[cfg_attr(docsrs, doc(cfg(feature = "std")))]
-pub mod ser;
-#[cfg(not(feature = "std"))]
+mod de;
+mod lexer;
+mod parser;
 mod ser;
-pub mod value;
+mod style;
+mod trivia;
+mod writer;
 
-mod io;
+pub use ser::{to_node, Serializer};
+pub use style::{Indent, IndentChar, KeyStyle, Quote, Separator, Style};
+
+use alloc::borrow::Cow;
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
+use core::fmt;
+use serde::de::DeserializeOwned;
+use serde::ser::Serialize;
+
+/// A parsed CSON document: a value tree plus the trivia needed to write it
+/// back out with comments intact.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Document<'a> {
+    pub(crate) root: Node<'a>,
+    /// Trivia after the last token, up to end of file.
+    pub(crate) suffix: Cow<'a, str>,
+    /// Whether the source omitted the outer `{` `}` (bare object root).
+    pub(crate) bare_root: bool,
+    pub(crate) style: Style,
+}
+
+/// A single value together with the trivia (whitespace + `#` comments) that
+/// preceded it in the source.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Node<'a> {
+    /// Raw whitespace/comment text before this node. Never contains `,`,
+    /// `:` or `=` -- those are emitted by the writer.
+    pub(crate) prefix: Cow<'a, str>,
+    pub(crate) value: Value<'a>,
+}
+
+/// A CSON value: what [`Node::value`] holds, once its trivia (comments,
+/// whitespace) has been set aside.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Value<'a> {
+    /// `null`.
+    Null,
+    /// `true` or `false`.
+    Bool(bool),
+    /// Any numeric literal, kept as raw text -- see [`Number`].
+    Number(Number<'a>),
+    /// Any string, regardless of how it was quoted in the source (or
+    /// will be quoted on write) -- see [`CsonStr`].
+    Str(CsonStr<'a>),
+    /// `[ ... ]`.
+    Array {
+        /// The array's elements, in source (or insertion) order.
+        items: Vec<Node<'a>>,
+        /// Trivia before the closing `]`.
+        trailing: Cow<'a, str>,
+    },
+    /// `{ ... }`, or a bare (brace-less) top-level document.
+    Object {
+        /// The object's key/value pairs, in source (or insertion) order.
+        /// Duplicate keys are preserved as separate entries, not merged.
+        entries: Vec<Entry<'a>>,
+        /// Trivia before the closing `}`.
+        trailing: Cow<'a, str>,
+    },
+}
+
+/// One `key: value` (or `key = value`) pair inside an [`Value::Object`].
+///
+/// The key is a full [`Node`], not a bare string, so a comment
+/// immediately before the key (rather than before the whole entry) has
+/// somewhere to live.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Entry<'a> {
+    pub(crate) key: Node<'a>,
+    pub(crate) value: Node<'a>,
+}
+
+/// A decoded CSON string. Quoting style is not stored here: the writer
+/// always re-renders according to `Style`, never per-node layout.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CsonStr<'a> {
+    pub(crate) value: Cow<'a, str>,
+}
+
+impl<'a> CsonStr<'a> {
+    /// Builds a string value from `s`. Always valid -- any content is
+    /// fine, since the writer quotes and escapes it as needed -- so
+    /// this is the recommended way to build a [`Value::Str`] by hand
+    /// (`Value::Str(CsonStr::new("hello"))`).
+    pub fn new<S: Into<Cow<'a, str>>>(s: S) -> Self {
+        CsonStr { value: s.into() }
+    }
+
+    /// The decoded string content (escapes already resolved).
+    pub fn as_str(&self) -> &str {
+        &self.value
+    }
+}
+
+/// A raw number literal. Kept as text (not `f64`) so integers beyond 2^53
+/// survive a round trip.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Number<'a> {
+    pub(crate) raw: Cow<'a, str>,
+}
+
+impl<'a> Number<'a> {
+    /// The number's literal text, exactly as it appeared in the source
+    /// (or was formatted on write) -- e.g. `"1.50"`, not `"1.5"`.
+    pub fn as_str(&self) -> &str {
+        &self.raw
+    }
+
+    /// Numeric equality, ignoring the raw literal's formatting (`1.50` ==
+    /// `1.5`).
+    pub fn numeric_eq(&self, other: &Number<'_>) -> bool {
+        if self.raw == other.raw {
+            return true;
+        }
+        match (self.raw.parse::<f64>(), other.raw.parse::<f64>()) {
+            (Ok(a), Ok(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
+/// Error produced while parsing or (de)serializing a CSON document.
+///
+/// Used both for genuine syntax errors (in which case `line`/`column`
+/// point at the offending byte, 1-indexed) and for `serde`
+/// (de)serialization errors raised via `serde::de::Error::custom`/
+/// `serde::ser::Error::custom` (in which case `line`/`column` are `0`,
+/// since those don't correspond to a specific position in a document).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParseError {
+    /// Human-readable description of what went wrong.
+    pub message: String,
+    /// 1-indexed source line, or `0` if not applicable (see above).
+    pub line: usize,
+    /// 1-indexed source column, or `0` if not applicable (see above).
+    pub column: usize,
+}
+
+impl fmt::Display for ParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} at line {} column {}", self.message, self.line, self.column)
+    }
+}
+
 #[cfg(feature = "std")]
-mod iter;
-#[cfg(feature = "float_roundtrip")]
-mod lexical;
-mod number;
-mod read;
+impl std::error::Error for ParseError {}
 
-#[cfg(feature = "raw_value")]
-mod raw;
+/// Shorthand for `Result<T, ParseError>`, used throughout this crate's
+/// public API.
+pub type ParseResult<T> = Result<T, ParseError>;
+
+impl<'a> Node<'a> {
+    /// Builds a new node with an empty prefix (no comment) around
+    /// `value`.
+    pub fn new(value: Value<'a>) -> Self {
+        Node { prefix: Cow::Borrowed(""), value }
+    }
+
+    /// This node's value.
+    pub fn value(&self) -> &Value<'a> {
+        &self.value
+    }
+
+    /// Mutable access to this node's value -- e.g. `match
+    /// node.value_mut() { Value::Object { entries, .. } => ..., ... }`
+    /// to reach into a nested structure. The node's `prefix` (and thus
+    /// any comment attached to it) is untouched by mutating through
+    /// this reference, which is exactly what makes it possible to
+    /// change a value without losing the comment above it -- see the
+    /// crate documentation's editing example.
+    pub fn value_mut(&mut self) -> &mut Value<'a> {
+        &mut self.value
+    }
+
+    /// Replaces this node's value, keeping its existing `prefix` (and
+    /// thus any comment attached to it) untouched.
+    pub fn set_value(&mut self, value: Value<'a>) {
+        self.value = value;
+    }
+
+    /// Discards this node's prefix and returns its value.
+    pub fn into_value(self) -> Value<'a> {
+        self.value
+    }
+
+    /// The raw whitespace/comment text preceding this node in the
+    /// source (or set via [`Node::set_prefix`]).
+    pub fn prefix(&self) -> &str {
+        &self.prefix
+    }
+
+    /// Set the raw prefix (whitespace + `#` comments) for this node.
+    ///
+    /// Returns an error if `text` contains anything other than whitespace
+    /// and `#`-comments, since that would silently produce invalid CSON.
+    pub fn set_prefix<S: Into<Cow<'a, str>>>(&mut self, text: S) -> Result<(), &'static str> {
+        let text = text.into();
+        if !trivia::is_valid_prefix(&text) {
+            return Err("prefix may only contain whitespace and '#' comments");
+        }
+        self.prefix = text;
+        Ok(())
+    }
+}
+
+impl<'a> Entry<'a> {
+    /// This entry's key, as a full node (so a comment before the key
+    /// has a prefix slot to live in).
+    pub fn key(&self) -> &Node<'a> {
+        &self.key
+    }
+
+    /// Mutable access to this entry's key node -- e.g. to rename a key
+    /// in place (`entry.key_mut().set_value(...)`) while keeping any
+    /// comment attached to it.
+    pub fn key_mut(&mut self) -> &mut Node<'a> {
+        &mut self.key
+    }
+
+    /// This entry's value.
+    pub fn value(&self) -> &Node<'a> {
+        &self.value
+    }
+
+    /// Mutable access to this entry's value node -- the way to change
+    /// one field's value while leaving its comment, and every other
+    /// entry, untouched. See the crate documentation's editing example.
+    pub fn value_mut(&mut self) -> &mut Node<'a> {
+        &mut self.value
+    }
+
+    /// The key's text, if it's a string (which, for a well-formed
+    /// [`Document`], it always is -- object keys are never anything
+    /// else).
+    pub fn key_str(&self) -> Option<&str> {
+        match &self.key.value {
+            Value::Str(s) => Some(s.as_str()),
+            _ => None,
+        }
+    }
+}
+
+impl Value<'static> {
+    /// Builds a value from any `Serialize` type, via the same Schicht 3
+    /// machinery [`crate::to_node`]/[`Document::from_serialize`] use.
+    ///
+    /// This is the recommended way to build a replacement
+    /// [`Value::Number`] by hand (there's no public raw-literal
+    /// constructor for `Number`, since a hand-written literal could be
+    /// syntactically invalid CSON and there would be nothing to catch
+    /// that until write time): `Value::from_serialize(&42i64)?` always
+    /// produces a valid one. It works equally well for whole nested
+    /// structures, e.g. `Value::from_serialize(&my_struct)?`.
+    pub fn from_serialize<T>(value: &T) -> ParseResult<Self>
+    where
+        T: ?Sized + Serialize,
+    {
+        Ok(ser::to_node(value)?.into_value())
+    }
+}
+
+impl<'a> Document<'a> {
+    /// The document's root node (an object, or an array for a
+    /// braced/bracketed top level -- see [`Document::bare_root`]).
+    pub fn root(&self) -> &Node<'a> {
+        &self.root
+    }
+
+    /// Mutable access to the root node, for hand-editing a value while
+    /// keeping every other node's `prefix` (and thus every comment)
+    /// intact. See the crate documentation's editing example.
+    pub fn root_mut(&mut self) -> &mut Node<'a> {
+        &mut self.root
+    }
+
+    /// Trivia (whitespace/comments) after the last token, up to end of
+    /// file -- e.g. a trailing `# note` with nothing after it.
+    pub fn suffix(&self) -> &str {
+        &self.suffix
+    }
+
+    /// Whether the source omitted the outer `{` `}` (a bare object
+    /// root, `ws object-items` in the grammar). Never `true` for an
+    /// array: CSON only allows a bare root for objects.
+    pub fn bare_root(&self) -> bool {
+        self.bare_root
+    }
+
+    /// The layout choices [`Document::to_cson_string`] renders with.
+    /// Detected first-match from the source by [`parse`], or
+    /// [`Style::default`] for a document built via
+    /// [`Document::from_serialize`].
+    pub fn style(&self) -> &Style {
+        &self.style
+    }
+
+    /// Override this document's [`Style`] -- e.g. to force a particular
+    /// separator or quote character regardless of what the source used.
+    pub fn set_style(&mut self, style: Style) {
+        self.style = style;
+    }
+
+    /// Schicht 2: deserialize the root node into a typed Rust value,
+    /// without going through `T`'s usual text round trip (so a later
+    /// `Document::from_serialize` + diff -- `merge_from`, not yet
+    /// implemented -- could in principle still see this document's
+    /// comments). See `de.rs`.
+    pub fn deserialize<'de, T>(&'de self) -> ParseResult<T>
+    where
+        T: serde::de::Deserialize<'de>,
+    {
+        T::deserialize(self.root())
+    }
+}
+
+impl Document<'static> {
+    /// Schicht 3: serialize a typed Rust value into a fresh `Document`
+    /// (default `Style`, no comments -- there is no source layout to
+    /// take one from). See `ser.rs`.
+    pub fn from_serialize<T>(value: &T) -> ParseResult<Self>
+    where
+        T: ?Sized + serde::ser::Serialize,
+    {
+        let root = tri!(ser::to_node(value));
+        Ok(Document { root, suffix: Cow::Borrowed(""), bare_root: false, style: Style::default() })
+    }
+}
+
+/// Parse a CSON document from text, preserving comments for a later write.
+pub fn parse(input: &str) -> ParseResult<Document<'_>> {
+    parser::parse_document(input)
+}
+
+impl<'a> fmt::Display for Document<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&writer::write_document(self))
+    }
+}
+
+impl<'a> Document<'a> {
+    /// Serialize the document back to CSON text.
+    pub fn to_cson_string(&self) -> String {
+        writer::write_document(self)
+    }
+}
+
+// ---------------------------------------------------------------------
+// The conventional top-level API a serde data-format crate is expected
+// to have (`from_str`/`to_string`/`from_reader`/`to_writer`, matching
+// serde_json/serde_yaml/toml naming), layered on top of Schicht 1 + 2/3
+// above. `T` here must be fully owned (`DeserializeOwned`, i.e. `for<'de>
+// Deserialize<'de>`): the `Document` these functions parse into is a
+// local temporary that doesn't outlive the call, so a `T` borrowing
+// straight from the input (`&str` fields and the like) can't be
+// expressed through this convenience layer. Call [`parse`] yourself and
+// keep the `Document` alive if you need that.
+
+/// Deserialize an instance of `T` from a string of CSON text.
+///
+/// A thin wrapper around [`parse`] + [`Document::deserialize`] for when
+/// you don't need to keep the parsed [`Document`] (and its comments)
+/// around afterward.
+pub fn from_str<T>(s: &str) -> ParseResult<T>
+where
+    T: DeserializeOwned,
+{
+    parse(s)?.deserialize()
+}
+
+/// Deserialize an instance of `T` from CSON text read from a UTF-8 byte
+/// slice.
+pub fn from_slice<T>(v: &[u8]) -> ParseResult<T>
+where
+    T: DeserializeOwned,
+{
+    let s = match core::str::from_utf8(v) {
+        Ok(s) => s,
+        Err(e) => return Err(ParseError { message: e.to_string(), line: 0, column: 0 }),
+    };
+    from_str(s)
+}
+
+/// Serialize `value` as a `String` of CSON text.
+///
+/// A thin wrapper around [`Document::from_serialize`] +
+/// [`Document::to_cson_string`]: default `Style`, no comments, since
+/// there's no source document to take either from. See
+/// [`Document::from_serialize`] for that trade-off in more detail.
+pub fn to_string<T>(value: &T) -> ParseResult<String>
+where
+    T: ?Sized + Serialize,
+{
+    Ok(Document::from_serialize(value)?.to_cson_string())
+}
+
+/// Serialize `value` as a CSON byte vector (UTF-8).
+pub fn to_vec<T>(value: &T) -> ParseResult<Vec<u8>>
+where
+    T: ?Sized + Serialize,
+{
+    Ok(to_string(value)?.into_bytes())
+}
+
+#[cfg(feature = "std")]
+fn io_error(e: std::io::Error) -> ParseError {
+    ParseError { message: e.to_string(), line: 0, column: 0 }
+}
+
+/// Deserialize an instance of `T` from CSON text read from an
+/// `io::Read` stream.
+///
+/// Reads the whole stream into memory first (this crate parses a
+/// complete document in one pass, not incrementally), so this offers no
+/// advantage over [`from_str`] beyond convenience with an existing
+/// reader; there is no streaming/multi-document support.
+#[cfg(feature = "std")]
+pub fn from_reader<R, T>(mut reader: R) -> ParseResult<T>
+where
+    R: std::io::Read,
+    T: DeserializeOwned,
+{
+    let mut buf = String::new();
+    match std::io::Read::read_to_string(&mut reader, &mut buf) {
+        Ok(_) => from_str(&buf),
+        Err(e) => Err(io_error(e)),
+    }
+}
+
+/// Serialize `value` as CSON text to an `io::Write` stream.
+#[cfg(feature = "std")]
+pub fn to_writer<W, T>(mut writer: W, value: &T) -> ParseResult<()>
+where
+    W: std::io::Write,
+    T: ?Sized + Serialize,
+{
+    let s = to_string(value)?;
+    match std::io::Write::write_all(&mut writer, s.as_bytes()) {
+        Ok(()) => Ok(()),
+        Err(e) => Err(io_error(e)),
+    }
+}
+
+#[cfg(test)]
+mod serde_tests;
+#[cfg(test)]
+mod tests;
