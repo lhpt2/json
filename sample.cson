@@ -1,0 +1,31 @@
+inputs : 1,
+outputs : 1,
+mappings: [
+	{
+		Slider: {
+			start: [0 , 0],
+			end: [5, 5],
+			colors: [
+				"RED",
+				"MIN_YELLOW",
+				"YELLOW",
+				"GREEN",
+			],
+			init_value: 0.75
+			actions: [
+				"set 0 5 yellow"
+				"set 1 1 red"
+				"message 0 0 0x90 0x18 0x88"
+			],
+		},
+		Button: {
+			start: [5, 6],
+			end: [8, 8],
+			color: "RED",
+			actions: [
+				"set 0 5 orange"
+				"message 1 0 0x90 0x77 0x89"
+			]
+		},
+	},
+]
