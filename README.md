@@ -5,11 +5,13 @@ comments and formatting across a parse/edit/write cycle — analogous to
 [`toml_edit`](https://docs.rs/toml_edit) for TOML.
 
 This crate started life as an in-tree module of a CSON-flavored fork of
-`serde_json`, developed on a sibling branch of this repository, and was
-later extracted onto this branch as its own independent crate. It has
-no dependency on that fork, or on any `serde_json` internals — the only
-dependency is `serde` itself, for the typed read/write layer described
-below.
+`serde_json`, and was later extracted into a standalone crate. Its
+development history lives on the `cson_edit` branch of
+[lhpt2/json](https://github.com/lhpt2/json/tree/cson_edit); the crate
+itself is mirrored to [lhpt2/cson_edit](https://github.com/lhpt2/cson_edit).
+It has no dependency on that fork, or on any `serde_json` internals —
+the only dependency is `serde` itself, for the typed read/write layer
+described below.
 
 ## Why a separate crate/parser at all
 
