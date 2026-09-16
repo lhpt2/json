@@ -326,6 +326,71 @@ into your app and adjusted rather than called. It uses `notify` as a
 **dev**-dependency, so it costs nothing to anyone depending on the
 crate.
 
+## "I need a multiline string, without escaping quotes"
+
+CSON has one, and it isn't triple-quotes: a **verbatim string**, written
+as one or more `|` fragments on consecutive lines.
+
+```rust
+use cson_edit::{parse, Value};
+
+let doc = parse("banner = |  \"quotes\" and \\n need no escaping\n         |# and this is not a comment\n")?;
+
+let Value::Object { entries, .. } = doc.root().value() else { panic!() };
+let Value::Str(s) = entries[0].value().value() else { panic!() };
+assert_eq!(s.as_str(), "  \"quotes\" and \\n need no escaping\n# and this is not a comment");
+# Ok::<(), cson_edit::ParseError>(())
+```
+
+Everything after the `|`, to the end of the line, is taken literally:
+no escape processing (a `\n` in the text stays a backslash and an `n`),
+no quoting rules, and `#` doesn't start a comment. Consecutive
+fragments are joined with `\n`. Leading whitespace *after* the `|` is
+part of the string, which is what makes this safe for the writer to
+re-indent — the `|` separates the indentation it regenerates from the
+content it must not touch. Verbatim strings are values only, never
+keys.
+
+**The one gotcha**, and it's in the spec rather than this
+implementation: inside an array, two fragments on consecutive lines are
+*one* string, not two, because the grammar prefers the longer reading.
+Separate them with a comma or a blank line to get two values:
+
+```text
+[            [                 [
+  |one         |one              |one
+  |two   →     ,         →
+]            |two              |two
+             ]                 ]
+one string   two strings       two strings
+```
+
+On the way out, whether a multi-line string is written as `|`
+fragments or as a quoted string with `\n` escapes is a `Style`
+decision — `Style::verbatim_strings`, **`false` by default**:
+
+```rust
+use cson_edit::{parse, Style};
+
+let mut doc = parse("a: \"first\\nsecond\"\n")?;
+assert_eq!(doc.to_cson_string(), "  a: \"first\\nsecond\"\n"); // default
+
+doc.set_style(Style { verbatim_strings: Some(true), ..Style::default() });
+assert_eq!(doc.to_cson_string(), "  a: |first\n  |second\n");
+# Ok::<(), cson_edit::ParseError>(())
+```
+
+Like every `Style` field it's first-match detected, so a document that
+already uses `|` anywhere keeps using it. It's one of the two fields
+with no reliable first match (many files contain no multi-line string
+at all), which is why the default is an explicit choice rather than a
+guess — see the `Style` section below.
+
+One known limitation: a comment written *between* two fragments has no
+per-fragment slot to live in, so it's folded into the merged string
+node's own prefix and resurfaces above the whole value. See "Known,
+accepted precision losses" in `README.md`.
+
 ## "I want to control how it's written out"
 
 The writer never reads layout back from the source — it always renders
