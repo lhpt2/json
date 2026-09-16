@@ -1,0 +1,30 @@
+[package]
+name = "cson_edit"
+version = "0.1.0"
+edition = "2021"
+description = "A CSON parser and editor that preserves comments and formatting, analogous to toml_edit."
+license = "MIT OR Apache-2.0"
+categories = ["encoding", "parser-implementations", "no-std"]
+keywords = ["cson", "json", "serde", "parser"]
+rust-version = "1.71"
+
+[features]
+default = ["std"]
+std = ["serde/std"]
+# Provide integration for heap-allocated collections without depending on
+# the rest of the Rust standard library.
+alloc = ["serde/alloc"]
+
+[dependencies]
+serde = { version = "1", default-features = false }
+
+[dev-dependencies]
+# default-features = false here on purpose: whether the unified `serde`
+# dependency ends up with "std" must be controlled by *this* crate's own
+# "std" feature (-> serde/std) alone. If this dev-dependency pulled in
+# serde's own default features (which include "std"), `cargo test
+# --no-default-features --features alloc` would silently get a
+# std-enabled serde regardless -- and serde::de::Error then requires
+# `StdError`, which ParseError only implements when *our* "std" feature
+# is on, breaking exactly that alloc-only test build.
+serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
