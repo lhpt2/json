@@ -1,4 +1,4 @@
-//! Hot reload: watch a `.cson` file and re-parse it when it changes on
+//! Hot reload: watch a CSON file and re-parse it when it changes on
 //! disk, so a running app picks up config edits without restarting.
 //!
 //! The watching lives here, in an example, rather than in the library,

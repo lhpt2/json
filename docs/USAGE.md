@@ -232,7 +232,11 @@ Full runnable version, including the array side (`get_index`/`push`/
 `remove_index`) and printing the before/after text so the comment
 relocation is visible: `examples/06_object_editing_api.rs`.
 
-## "I want to read and write an actual `.cson` file on disk"
+## "I want to read and write an actual CSON file on disk"
+
+Any extension works — `.csn` is the recommended one (`.cson` collides
+with CoffeeScript Object Notation), but nothing here checks: the library
+never sees a filename.
 
 There's no `Document::open(path)` — a `Document<'a>` borrows from the
 `&str` it was parsed from wherever it can, so *you* read the file into
@@ -243,14 +247,14 @@ borrowing parsers), and `parse` borrows from that:
 use cson_edit::{parse, Value};
 use std::fs;
 
-let source = fs::read_to_string("config.cson")?;
+let source = fs::read_to_string("config.csn")?;
 let mut doc = parse(&source)?;
 
 if let Some(port) = doc.root_mut().value_mut().get_mut("port") {
     port.set_value(Value::from_serialize(&9090i64)?);
 }
 
-fs::write("config.cson", doc.to_cson_string())?;
+fs::write("config.csn", doc.to_cson_string())?;
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
@@ -269,15 +273,15 @@ the same substitution applies to the top-level typed functions:
 ```rust,no_run
 # use serde::{Deserialize, Serialize};
 # #[derive(Serialize, Deserialize)] struct Config { port: u16 }
-let f = std::fs::File::open("config.cson")?;
+let f = std::fs::File::open("config.csn")?;
 let cfg: Config = cson_edit::from_reader(f)?;
 
-let out = std::fs::File::create("config.cson")?;
+let out = std::fs::File::create("config.csn")?;
 cson_edit::to_writer(out, &cfg)?;
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
-Full runnable version — reads `examples/sample_with_comments.cson`
+Full runnable version — reads `examples/sample_with_comments.csn`
 from disk, edits a nested field and appends an array element, writes
 the result to a temp file, then reads that back and checks every
 comment survived and both edits landed:

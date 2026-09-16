@@ -1,4 +1,4 @@
-//! Reading and writing actual `.cson` files on disk, not just in-memory
+//! Reading and writing actual CSON files on disk, not just in-memory
 //! strings -- and, since that's almost always why you'd reach for this
 //! crate over `serde_json`, doing it while an edit is applied and every
 //! comment in the file survives.
@@ -22,7 +22,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // A fixture file checked into examples/, not a temp string, so this
     // demonstrates a real file read. CARGO_MANIFEST_DIR anchors the path
     // to the crate root regardless of the process's current directory.
-    let input_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/sample_with_comments.cson");
+    let input_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/sample_with_comments.csn");
     let source = fs::read_to_string(&input_path)?;
 
     let mut doc = parse(&source)?;
@@ -47,7 +47,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // touch the checked-in fixture. In a real config-editing tool this
     // would usually be `fs::write(&input_path, output)` to overwrite
     // the file it read from.
-    let output_path = std::env::temp_dir().join("cson_edit_example_output.cson");
+    let output_path = std::env::temp_dir().join("cson_edit_example_output.csn");
     fs::write(&output_path, &output)?;
     println!("--- wrote to {} ---\n{output}", output_path.display());
 

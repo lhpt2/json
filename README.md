@@ -4,6 +4,14 @@ A CSON (Cursive Script Object Notation) parser and editor that preserves
 comments and formatting across a parse/edit/write cycle — analogous to
 [`toml_edit`](https://docs.rs/toml_edit) for TOML.
 
+**Not to be confused with CoffeeScript Object Notation**, which shares
+both the abbreviation "CSON" and the `.cson` file extension but is an
+entirely unrelated format (CoffeeScript object literals). This crate
+implements [Kang Seonghoon's CSON](https://github.com/lifthrasiir/cson),
+a strict superset of JSON: comments, unquoted keys, `=` as well as `:`,
+single-quoted and `|`-verbatim strings, optional commas, and a
+brace-less top level.
+
 This crate started life as an in-tree module of a CSON-flavored fork of
 `serde_json`, and was later extracted into a standalone crate. Its
 development history lives on the `cson_edit` branch of
@@ -12,6 +20,15 @@ itself is mirrored to [lhpt2/cson_edit](https://github.com/lhpt2/cson_edit).
 It has no dependency on that fork, or on any `serde_json` internals —
 the only dependency is `serde` itself, for the typed read/write layer
 described below.
+
+## File extensions
+
+Both `.cson` and `.csn` are accepted, and **`.csn` is recommended** —
+precisely because `.cson` is ambiguous with the CoffeeScript format
+above. Nothing in this crate enforces either: the library never looks at
+a filename. `parse` takes text, so you read whatever file you like and
+hand it the contents — there is deliberately no `Document::open(path)`,
+for the borrowing reasons spelled out in `docs/USAGE.md`.
 
 ## Why a separate crate/parser at all
 
@@ -118,7 +135,7 @@ order you're likely to need them:
   overriding it before writing.
 * `05_file_roundtrip.rs` — the same edit-preserving-comments pattern
   as `03`, but against an actual file on disk
-  (`examples/sample_with_comments.cson`) instead of an in-memory
+  (`examples/sample_with_comments.csn`) instead of an in-memory
   string: `fs::read_to_string` in, `fs::write` out.
 * `06_object_editing_api.rs` — `Value::get`/`insert`/`remove` (objects,
   by key) and `get_index`/`push`/`remove_index` (arrays, by position);

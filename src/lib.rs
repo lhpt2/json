@@ -1,6 +1,14 @@
 //! `cson_edit` — a CSON parser and editor that preserves comments and
 //! formatting, analogous to [`toml_edit`](https://docs.rs/toml_edit).
 //!
+//! CSON here is [Kang Seonghoon's Cursive Script Object
+//! Notation](https://github.com/lifthrasiir/cson), a strict superset of
+//! JSON — **not** CoffeeScript Object Notation, which shares both the
+//! abbreviation and the `.cson` extension but is unrelated. Both
+//! `.cson` and `.csn` are accepted for CSON files and `.csn` is
+//! recommended for exactly that reason, though nothing here enforces
+//! it: [`parse`] takes text and never sees a filename.
+//!
 //! This crate is the `Document -> Node` tree originally designed as part
 //! of a CSON-flavored `serde_json` fork: a parse tree that keeps comments
 //! and blank lines around so a configuration file can be edited and
@@ -635,7 +643,7 @@ impl<'a> Document<'a> {
     /// ```
     /// # fn main() -> Result<(), cson_edit::ParseError> {
     /// let doc = {
-    ///     let text = std::fs::read_to_string("examples/sample_with_comments.cson")
+    ///     let text = std::fs::read_to_string("examples/sample_with_comments.csn")
     ///         .unwrap_or_else(|_| "name: \"svc\"  # comment\n".to_string());
     ///     cson_edit::parse(&text)?.into_owned()
     /// }; // `text` is gone, `doc` is not
