@@ -28,28 +28,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut doc = parse(&source)?;
     println!("--- read from {} ---\n{source}", input_path.display());
 
-    // Apply an edit the same way 03_edit_preserving_comments.rs does:
-    // find the Node, overwrite only its value. Here: bump the port, and
-    // append a new button to the array (append doesn't disturb any
-    // existing Node, so nothing to overwrite for that one).
-    if let Value::Object { entries, .. } = doc.root_mut().value_mut() {
-        for entry in entries.iter_mut() {
-            match entry.key_str() {
-                Some("server") => {
-                    if let Value::Object { entries, .. } = entry.value_mut().value_mut() {
-                        if let Some(port) = entries.iter_mut().find(|e| e.key_str() == Some("port")) {
-                            port.value_mut().set_value(Value::from_serialize(&9090i64)?);
-                        }
-                    }
-                }
-                Some("buttons") => {
-                    if let Value::Array { items, .. } = entry.value_mut().value_mut() {
-                        items.push(cson_edit::Node::new(Value::from_serialize(&"shift")?));
-                    }
-                }
-                _ => {}
-            }
-        }
+    // Apply an edit the same way 03_edit_preserving_comments.rs does,
+    // via the Value::get_mut/push convenience methods described in
+    // 06_object_editing_api.rs: bump the port, and append a new button
+    // to the array (push doesn't disturb any existing Node, so there's
+    // nothing to overwrite for that one).
+    let root = doc.root_mut().value_mut();
+    if let Some(port) = root.get_mut("server").and_then(|s| s.value_mut().get_mut("port")) {
+        port.set_value(Value::from_serialize(&9090i64)?);
+    }
+    if let Some(buttons) = root.get_mut("buttons") {
+        buttons.value_mut().push(cson_edit::Node::new(Value::from_serialize(&"shift")?)).expect("buttons is an array");
     }
 
     let output = doc.to_cson_string();

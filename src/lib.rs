@@ -344,6 +344,164 @@ impl<'a> Entry<'a> {
     }
 }
 
+/// Concatenates two trivia strings in source order, borrowing whichever
+/// side is non-empty rather than allocating when only one side has
+/// content -- the common case for [`Value::remove`]/[`Value::remove_index`],
+/// where a removed node usually has no comment at all.
+fn concat_prefix<'a>(a: Cow<'a, str>, b: Cow<'a, str>) -> Cow<'a, str> {
+    if a.is_empty() {
+        return b;
+    }
+    if b.is_empty() {
+        return a;
+    }
+    let mut s = a.into_owned();
+    s.push_str(&b);
+    Cow::Owned(s)
+}
+
+impl<'a> Value<'a> {
+    /// Looks up `key` among this object's entries, returning its value
+    /// node. `None` if `self` isn't [`Value::Object`], or has no entry
+    /// with that key. Entries are searched in source order, so a
+    /// duplicate key (CSON allows them; see [`Value::Object`]'s doc
+    /// comment) resolves to the first match.
+    pub fn get(&self, key: &str) -> Option<&Node<'a>> {
+        match self {
+            Value::Object { entries, .. } => {
+                entries.iter().find(|e| e.key_str() == Some(key)).map(Entry::value)
+            }
+            _ => None,
+        }
+    }
+
+    /// Mutable version of [`Value::get`].
+    pub fn get_mut(&mut self, key: &str) -> Option<&mut Node<'a>> {
+        match self {
+            Value::Object { entries, .. } => {
+                entries.iter_mut().find(|e| e.key_str() == Some(key)).map(Entry::value_mut)
+            }
+            _ => None,
+        }
+    }
+
+    /// Appends a new `key: value` entry to this object, after every
+    /// existing one -- including any existing entry with the same key;
+    /// this never deduplicates (see [`Value::Object`]'s doc comment on
+    /// why duplicate keys are preserved). The new entry's key node has
+    /// an empty prefix (no comment); use [`Node::set_prefix`] on
+    /// [`Entry::key_mut`] afterward to add one.
+    ///
+    /// Returns `Err` if `self` isn't [`Value::Object`] -- this never
+    /// silently changes `self`'s variant.
+    pub fn insert<K>(&mut self, key: K, value: Node<'a>) -> Result<(), &'static str>
+    where
+        K: Into<Cow<'a, str>>,
+    {
+        match self {
+            Value::Object { entries, .. } => {
+                entries.push(Entry { key: Node::new(Value::Str(CsonStr::new(key))), value });
+                Ok(())
+            }
+            _ => Err("Value::insert called on a value that is not an object"),
+        }
+    }
+
+    /// Removes and returns the entry for `key`, if `self` is
+    /// [`Value::Object`] and has one (the first match, if the key is
+    /// duplicated).
+    ///
+    /// Implements the deletion rule from the crate's design notes: the
+    /// removed entry's comments (its key's prefix, then its value's, in
+    /// that source order) are not discarded -- they move onto whatever
+    /// now takes its place, the following entry's key prefix, or the
+    /// object's `trailing` slot if the removed entry was last. The
+    /// returned node's own prefix is cleared, since its content has
+    /// already been relocated: reinserting the returned node elsewhere
+    /// therefore can't duplicate the comment.
+    pub fn remove(&mut self, key: &str) -> Option<Node<'a>> {
+        match self {
+            Value::Object { entries, trailing } => {
+                let idx = entries.iter().position(|e| e.key_str() == Some(key))?;
+                let mut removed = entries.remove(idx);
+                let key_prefix = core::mem::replace(&mut removed.key.prefix, Cow::Borrowed(""));
+                let value_prefix = core::mem::replace(&mut removed.value.prefix, Cow::Borrowed(""));
+                let moved = concat_prefix(key_prefix, value_prefix);
+                if idx < entries.len() {
+                    let next_prefix = core::mem::replace(&mut entries[idx].key.prefix, Cow::Borrowed(""));
+                    entries[idx].key.prefix = concat_prefix(moved, next_prefix);
+                } else {
+                    let old_trailing = core::mem::replace(trailing, Cow::Borrowed(""));
+                    *trailing = concat_prefix(moved, old_trailing);
+                }
+                Some(removed.value)
+            }
+            _ => None,
+        }
+    }
+
+    /// Element at `index`, if `self` is [`Value::Array`] and `index` is
+    /// in bounds. A thin wrapper (`items.get(index)` works just as well
+    /// once you've matched into [`Value::Array`]) kept for symmetry with
+    /// [`Value::get`].
+    pub fn get_index(&self, index: usize) -> Option<&Node<'a>> {
+        match self {
+            Value::Array { items, .. } => items.get(index),
+            _ => None,
+        }
+    }
+
+    /// Mutable version of [`Value::get_index`].
+    pub fn get_index_mut(&mut self, index: usize) -> Option<&mut Node<'a>> {
+        match self {
+            Value::Array { items, .. } => items.get_mut(index),
+            _ => None,
+        }
+    }
+
+    /// Appends `value` to this array, after every existing element.
+    ///
+    /// Returns `Err` if `self` isn't [`Value::Array`] -- this never
+    /// silently changes `self`'s variant.
+    pub fn push(&mut self, value: Node<'a>) -> Result<(), &'static str> {
+        match self {
+            Value::Array { items, .. } => {
+                items.push(value);
+                Ok(())
+            }
+            _ => Err("Value::push called on a value that is not an array"),
+        }
+    }
+
+    /// Removes and returns the element at `index`, if `self` is
+    /// [`Value::Array`] and `index` is in bounds.
+    ///
+    /// Same comment-migration rule as [`Value::remove`]: the removed
+    /// element's prefix moves onto the next element's prefix, or the
+    /// array's `trailing` slot if the removed element was last; the
+    /// returned node's own prefix is cleared.
+    pub fn remove_index(&mut self, index: usize) -> Option<Node<'a>> {
+        match self {
+            Value::Array { items, trailing } => {
+                if index >= items.len() {
+                    return None;
+                }
+                let mut removed = items.remove(index);
+                let moved = core::mem::replace(&mut removed.prefix, Cow::Borrowed(""));
+                if index < items.len() {
+                    let next_prefix = core::mem::replace(&mut items[index].prefix, Cow::Borrowed(""));
+                    items[index].prefix = concat_prefix(moved, next_prefix);
+                } else {
+                    let old_trailing = core::mem::replace(trailing, Cow::Borrowed(""));
+                    *trailing = concat_prefix(moved, old_trailing);
+                }
+                Some(removed)
+            }
+            _ => None,
+        }
+    }
+}
+
 impl Value<'static> {
     /// Builds a value from any `Serialize` type, via the same Schicht 3
     /// machinery [`crate::to_node`]/[`Document::from_serialize`] use.

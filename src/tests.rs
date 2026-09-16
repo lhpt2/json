@@ -409,3 +409,126 @@ fn double_quoted_strings_handle_surrogate_pairs() {
         panic!("expected object root");
     }
 }
+
+#[test]
+fn object_get_finds_first_of_duplicate_keys() {
+    let doc = parse(r#"{a: 1, b: 2, a: 3}"#).unwrap();
+    let root = doc.root().value();
+    match root.get("a").unwrap().value() {
+        Value::Number(n) => assert_eq!(n.as_str(), "1"),
+        _ => panic!("expected number"),
+    }
+    assert!(root.get("nope").is_none());
+    assert!(root.get_index(0).is_none()); // not an array
+}
+
+#[test]
+fn object_insert_appends_without_deduping() {
+    let mut doc = parse(r#"{a: 1}"#).unwrap();
+    doc.root_mut()
+        .value_mut()
+        .insert("b", Node::new(Value::from_serialize(&2i64).unwrap()))
+        .unwrap();
+    doc.root_mut()
+        .value_mut()
+        .insert("a", Node::new(Value::from_serialize(&99i64).unwrap()))
+        .unwrap();
+    if let Value::Object { entries, .. } = doc.root().value() {
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].key_str(), Some("a"));
+        assert_eq!(entries[1].key_str(), Some("b"));
+        assert_eq!(entries[2].key_str(), Some("a"));
+    } else {
+        panic!("expected object");
+    }
+    assert_eq!(doc.to_cson_string(), "{\n  a: 1,\n  b: 2,\n  a: 99\n}\n");
+}
+
+#[test]
+fn insert_and_push_reject_the_wrong_variant() {
+    let mut arr = Value::Array { items: alloc::vec::Vec::new(), trailing: Cow::Borrowed("") };
+    assert!(arr.insert("x", Node::new(Value::Null)).is_err());
+    let mut obj = Value::Object { entries: alloc::vec::Vec::new(), trailing: Cow::Borrowed("") };
+    assert!(obj.push(Node::new(Value::Null)).is_err());
+}
+
+#[test]
+fn object_remove_middle_entry_moves_its_comments_onto_the_next_key() {
+    let mut doc = parse("a: 1\n# about b\nb: 2\nc: 3\n").unwrap();
+    let removed = doc.root_mut().value_mut().remove("b").unwrap();
+    assert_eq!(removed.prefix(), ""); // relocated, not duplicated
+    let text = doc.to_cson_string();
+    assert!(text.contains("# about b"));
+    assert!(!text.contains("b: 2"));
+    // moved onto c's prefix, ahead of c itself
+    let reparsed = parse(&text).unwrap();
+    if let Value::Object { entries, .. } = reparsed.root().value() {
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[1].key_str(), Some("c"));
+        assert!(entries[1].key().prefix().contains("# about b"));
+    } else {
+        panic!("expected object");
+    }
+}
+
+#[test]
+fn object_remove_last_entry_moves_its_comments_into_trailing() {
+    let mut doc = parse("{\n  a: 1\n  # about b\n  b: 2\n}\n").unwrap();
+    doc.root_mut().value_mut().remove("b").unwrap();
+    let text = doc.to_cson_string();
+    let reparsed = parse(&text).unwrap();
+    assert!(text.contains("# about b"));
+    if let Value::Object { entries, trailing } = reparsed.root().value() {
+        assert_eq!(entries.len(), 1);
+        assert!(trailing.contains("# about b"));
+    } else {
+        panic!("expected object");
+    }
+}
+
+#[test]
+fn object_remove_missing_key_is_a_no_op() {
+    let mut doc = parse(r#"{a: 1}"#).unwrap();
+    assert!(doc.root_mut().value_mut().remove("nope").is_none());
+}
+
+#[test]
+fn array_remove_index_moves_its_comment_onto_the_next_element() {
+    let mut doc = parse("[\n  1\n  # about two\n  2\n  3\n]\n").unwrap();
+    let removed = doc.root_mut().value_mut().remove_index(1).unwrap();
+    assert_eq!(removed.prefix(), "");
+    let text = doc.to_cson_string();
+    let reparsed = parse(&text).unwrap();
+    if let Value::Array { items, .. } = reparsed.root().value() {
+        assert_eq!(items.len(), 2);
+        assert!(items[1].prefix().contains("# about two"));
+    } else {
+        panic!("expected array");
+    }
+}
+
+#[test]
+fn array_remove_last_index_moves_its_comment_into_trailing() {
+    let mut doc = parse("[\n  1\n  # about two\n  2\n]\n").unwrap();
+    doc.root_mut().value_mut().remove_index(1).unwrap();
+    let text = doc.to_cson_string();
+    let reparsed = parse(&text).unwrap();
+    if let Value::Array { items, trailing } = reparsed.root().value() {
+        assert_eq!(items.len(), 1);
+        assert!(trailing.contains("# about two"));
+    } else {
+        panic!("expected array");
+    }
+}
+
+#[test]
+fn array_push_and_get_index() {
+    let mut doc = parse(r#"[1, 2]"#).unwrap();
+    doc.root_mut()
+        .value_mut()
+        .push(Node::new(Value::from_serialize(&3i64).unwrap()))
+        .unwrap();
+    let root = doc.root().value();
+    assert_eq!(root.get_index(2).unwrap().value(), &Value::from_serialize(&3i64).unwrap());
+    assert!(root.get_index(3).is_none());
+}

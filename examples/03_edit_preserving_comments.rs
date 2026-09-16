@@ -11,7 +11,7 @@
 //!
 //! Run with: `cargo run --example 03_edit_preserving_comments`
 
-use cson_edit::{parse, Node, Value};
+use cson_edit::{parse, Value};
 
 fn main() -> Result<(), cson_edit::ParseError> {
     let source = r#"
@@ -29,9 +29,18 @@ tags: ["web", "prod"]
 
     let mut doc = parse(source)?;
 
-    // Reach into the tree: root -> "server" entry -> its value (an
-    // object) -> "port" entry -> its value node.
-    let port_node = find_mut(doc.root_mut().value_mut(), &["server", "port"])
+    // Reach into the tree with Value::get_mut, one object level at a
+    // time: root -> "server" entry's value (an object) -> "port"
+    // entry's value node. get_mut returns None for a missing key or a
+    // non-object Value, rather than panicking -- exactly what `?`/
+    // `.expect(...)` want on the other end.
+    let port_node = doc
+        .root_mut()
+        .value_mut()
+        .get_mut("server")
+        .expect("server should exist")
+        .value_mut()
+        .get_mut("port")
         .expect("server.port should exist");
 
     // The important part: Value::from_serialize builds a fresh, valid
@@ -42,13 +51,11 @@ tags: ["web", "prod"]
 
     // Same idea for a plain string field, one level up: replace name's
     // value while keeping the header comment above it untouched.
-    if let Value::Object { entries, .. } = doc.root_mut().value_mut() {
-        for entry in entries.iter_mut() {
-            if entry.key_str() == Some("name") {
-                entry.value_mut().set_value(Value::from_serialize(&"renamed-service")?);
-            }
-        }
-    }
+    doc.root_mut()
+        .value_mut()
+        .get_mut("name")
+        .expect("name should exist")
+        .set_value(Value::from_serialize(&"renamed-service")?);
 
     let text = doc.to_cson_string();
     println!("{text}");
@@ -62,25 +69,4 @@ tags: ["web", "prod"]
     println!("(comments intact, both edits applied)");
 
     Ok(())
-}
-
-/// Walks `value` through a sequence of object keys, returning the final
-/// key's `Node` itself (not just its value) -- so the caller can call
-/// `set_value` on it directly. A tiny hand-rolled path-finder, standing
-/// in for the recursive matching `Document::merge_from` will eventually
-/// automate.
-fn find_mut<'a, 'doc>(
-    value: &'a mut Value<'doc>,
-    path: &[&str],
-) -> Option<&'a mut Node<'doc>> {
-    let Value::Object { entries, .. } = value else {
-        return None;
-    };
-    let (first, rest) = path.split_first()?;
-    let entry = entries.iter_mut().find(|e| e.key_str() == Some(*first))?;
-    if rest.is_empty() {
-        Some(entry.value_mut())
-    } else {
-        find_mut(entry.value_mut().value_mut(), rest)
-    }
 }

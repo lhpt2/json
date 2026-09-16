@@ -14,6 +14,7 @@ cargo run --example 02_parse_and_inspect
 cargo run --example 03_edit_preserving_comments
 cargo run --example 04_custom_style
 cargo run --example 05_file_roundtrip
+cargo run --example 06_object_editing_api
 ```
 
 ## Installing
@@ -101,10 +102,8 @@ let mut doc = parse(
     "# ops override, see runbook#42\nport = 8080\n"
 )?;
 
-if let Value::Object { entries, .. } = doc.root_mut().value_mut() {
-    if let Some(entry) = entries.iter_mut().find(|e| e.key_str() == Some("port")) {
-        entry.value_mut().set_value(Value::from_serialize(&9090i64)?);
-    }
+if let Some(port) = doc.root_mut().value_mut().get_mut("port") {
+    port.set_value(Value::from_serialize(&9090i64)?);
 }
 
 let text = doc.to_cson_string();
@@ -117,6 +116,10 @@ The API surface this pattern relies on:
 
 * `doc.root_mut()` / `Node::value_mut()` — mutable access down into the
   tree, without disturbing any `prefix` you don't explicitly touch.
+* `Value::get_mut(key)` — looks up an entry by key on a
+  [`Value::Object`], returning `None` for a missing key or a non-object
+  `Value` rather than panicking. For a nested path, chain it:
+  `root.get_mut("server").and_then(|s| s.value_mut().get_mut("port"))`.
 * `Value::from_serialize(&x)` — builds a fresh `Value` from any
   `Serialize` type (an `i64`, a `String`, a whole nested struct), the
   same way the typed write path (`Document::from_serialize`) does
@@ -127,16 +130,52 @@ The API surface this pattern relies on:
   `prefix` (comment) untouched. There's also `Entry::key_mut()` for
   renaming a key the same way.
 
-For a deeper path than one level, write a small recursive helper that
-returns `&mut Node` at the end of the path (see `find_mut` in the
-example below) — there's no built-in path/pointer API for this yet,
-since it would need to make a choice about missing-key behavior
-(`merge_from`'s job, eventually) that a general-purpose helper
-shouldn't guess at.
-
 Full runnable version (two edits, nested and top-level, both verified
 by checking the comments and the old value are gone/present as
 expected): `examples/03_edit_preserving_comments.rs`.
+
+## "I want to add or delete an entry, not just change a value"
+
+`Value` has a small get/insert/remove API (for `Value::Object`, by key;
+`Value::Array`'s equivalents are index-based: `get_index`/
+`get_index_mut`/`push`/`remove_index`) — no need to match on the
+variant and walk `entries`/`items` by hand for the common cases:
+
+```rust
+use cson_edit::{parse, Node, Value};
+
+let mut doc = parse("a: 1\n# about b\nb: 2\nc: 3\n")?;
+let root = doc.root_mut().value_mut();
+
+root.insert("d", Node::new(Value::from_serialize(&4i64)?))?; // always appends
+
+let removed = root.remove("b").unwrap();
+assert_eq!(removed.prefix(), ""); // its comment didn't just vanish...
+let text = doc.to_cson_string();
+assert!(text.contains("# about b")); // ...it moved onto `c`, which took its place
+# Ok::<(), cson_edit::ParseError>(())
+```
+
+`remove`/`remove_index` are the ones worth knowing well: deleting an
+entry with `Vec::remove` on `entries`/`items` directly would silently
+drop that entry's comment along with it. These instead implement the
+crate's deletion rule -- the removed node's comment(s) move onto
+whatever now takes its place (the following entry/element's prefix, or
+the container's `trailing` slot if the removed one was last) -- so the
+comment always describes *something* nearby afterward, never nothing.
+The node they return has its own prefix cleared for exactly this
+reason: if you keep it and reinsert it elsewhere, its old comment isn't
+duplicated (it already lives at the new spot).
+
+`insert`/`push` always append, even if the key already exists -- CSON
+keeps duplicate keys rather than silently merging them (see
+`Value::Object`'s doc comment) -- so they're for adding an entry that
+isn't there yet, not updating one (use `get_mut` + `Node::set_value`
+for that, as in the previous section).
+
+Full runnable version, including the array side (`get_index`/`push`/
+`remove_index`) and printing the before/after text so the comment
+relocation is visible: `examples/06_object_editing_api.rs`.
 
 ## "I want to read and write an actual `.cson` file on disk"
 
@@ -152,10 +191,8 @@ use std::fs;
 let source = fs::read_to_string("config.cson")?;
 let mut doc = parse(&source)?;
 
-if let Value::Object { entries, .. } = doc.root_mut().value_mut() {
-    if let Some(entry) = entries.iter_mut().find(|e| e.key_str() == Some("port")) {
-        entry.value_mut().set_value(Value::from_serialize(&9090i64)?);
-    }
+if let Some(port) = doc.root_mut().value_mut().get_mut("port") {
+    port.set_value(Value::from_serialize(&9090i64)?);
 }
 
 fs::write("config.cson", doc.to_cson_string())?;

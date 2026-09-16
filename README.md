@@ -98,7 +98,7 @@ println!("{}", fresh.to_cson_string());
 
 ## Examples
 
-`examples/` has five runnable, commented programs, each `cargo run
+`examples/` has six runnable, commented programs, each `cargo run
 --example NAME` away, and `docs/USAGE.md` walks through them in the
 order you're likely to need them:
 
@@ -115,6 +115,10 @@ order you're likely to need them:
   as `03`, but against an actual file on disk
   (`examples/sample_with_comments.cson`) instead of an in-memory
   string: `fs::read_to_string` in, `fs::write` out.
+* `06_object_editing_api.rs` — `Value::get`/`insert`/`remove` (objects,
+  by key) and `get_index`/`push`/`remove_index` (arrays, by position);
+  `remove`/`remove_index` visibly relocate the removed node's comment
+  rather than dropping it, per the deletion rule described below.
 
 ## Module layout
 
@@ -167,6 +171,51 @@ pub struct Number<'a> { raw: Cow<'a, str> } // literal text, not f64/i64 --
 `CsonStr` holds only the decoded string value — no per-node quote style.
 That's deliberate: layout is a document-wide `Style` choice, applied
 uniformly by the writer, never stored per node.
+
+## Editing: `get`/`insert`/`remove`
+
+Changing an existing value is `get_mut` + `Node::set_value` (see
+"Schicht 2 and 3" below for why it's not `Node::value_mut()` alone that
+matters, but *only* replacing `value` and never the whole `Node`).
+Adding or deleting an entry is `Value::insert`/`push` and
+`Value::remove`/`remove_index` — small enough to be a few lines of
+`Vec` manipulation by hand, except for one rule that's easy to get
+wrong by hand: **deleting a node must not delete its comment**, since
+the comment usually still describes something (whatever now sits where
+the deleted node was), not nothing.
+
+The rule, applied by `remove`/`remove_index`:
+
+* the removed node's comment(s) — its own `prefix`, and for an object
+  entry, its key's `prefix` too, in that source order — are not
+  discarded;
+* they're prepended onto whatever now takes the removed node's place:
+  the following entry's key `prefix` (objects) or the following
+  element's `prefix` (arrays);
+* if the removed node was last, they're prepended onto the container's
+  `trailing` slot instead.
+
+This is pure trivia concatenation (`prefix(next) = prefix(removed) +
+prefix(next)`) — no separator handling needed, since the writer emits
+`,`/`:`/`=` itself and never reads one back from trivia. The node
+`remove`/`remove_index` hands back has its own `prefix` cleared, since
+that content has already been relocated: reinserting the returned node
+elsewhere can't end up duplicating the comment.
+
+`insert`/`push` always append, never overwrite an existing key — CSON
+keeps duplicate keys as separate entries rather than merging them (see
+`Value::Object`'s doc comment), so `insert` can't decide "overwrite" is
+the right thing to do on your behalf. Use them for a genuinely new
+entry; use `get_mut` + `Node::set_value` on an existing one instead.
+
+```rust,ignore
+let root = doc.root_mut().value_mut();
+root.insert("version", Node::new(Value::from_serialize(&1)?))?;
+let removed = root.remove("deprecated_field"); // its comment moves to whatever's next
+```
+
+See `examples/06_object_editing_api.rs` / `docs/USAGE.md` for a full
+runnable version, including the array side.
 
 ## Pipeline
 
@@ -345,20 +394,23 @@ alone don't get you there. `Document::from_serialize(&cfg)` builds a
 `Style`; substituting it for `doc.root` would silently discard every
 comment `doc` had. The only thing that could safely stand in for
 `merge_from` today is manually finding the one `Node` you changed (via
-`doc.root_mut()` and matching down through `Value::Object`/`Array` by
-hand) and overwriting just that node's `value` — via `Node::value_mut`/
-`set_value` and `Entry::key_mut`/`value_mut`, building the replacement
-`Value` itself with `Value::from_serialize` (which runs it through this
-same Schicht 3 machinery) rather than constructing a `Value` variant by
-hand. See `examples/03_edit_preserving_comments.rs` and
-`docs/USAGE.md` for the pattern end to end. It's exactly the tedious,
-error-prone, whole-document-structural-knowledge-required
-process `merge_from` exists to automate (object/array diffing by
-key/position, `value`-only overwrites so a changed node's `prefix`
-survives, an equality check that ignores trivia, numeric rather than
-textual equality for numbers). None of that diffing exists yet —
+`doc.root_mut()` and `Value::get_mut`/`get_index_mut`, see "Editing:
+`get`/`insert`/`remove`" above) and overwriting just that node's
+`value` — via `Node::value_mut`/`set_value` and `Entry::key_mut`/
+`value_mut`, building the replacement `Value` itself with
+`Value::from_serialize` (which runs it through this same Schicht 3
+machinery) rather than constructing a `Value` variant by hand. See
+`examples/03_edit_preserving_comments.rs` and `docs/USAGE.md` for the
+pattern end to end. It's exactly the tedious, whole-document-
+structural-knowledge-required process `merge_from` exists to automate
+(object/array diffing by key/position, `value`-only overwrites so a
+changed node's `prefix` survives, an equality check that ignores
+trivia, numeric rather than textual equality for numbers) — `get_mut`/
+`insert`/`remove` make locating and changing *one* known node
+straightforward, but `merge_from`'s job is deciding, for a whole tree
+at once, which nodes changed at all. That diffing doesn't exist yet —
 building it is the next step, not a byproduct of already having a
-Deserializer and a Serializer.
+Deserializer, a Serializer, and per-node editing primitives.
 
 ## Known, accepted precision losses
 
