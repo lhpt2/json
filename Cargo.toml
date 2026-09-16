@@ -18,6 +18,12 @@ alloc = ["serde/alloc"]
 [dependencies]
 serde = { version = "1", default-features = false }
 
+[[example]]
+# Reads/writes real files (std::fs), unlike the other examples, so it
+# only makes sense -- and only compiles -- with the "std" feature on.
+name = "05_file_roundtrip"
+required-features = ["std"]
+
 [dev-dependencies]
 # default-features = false here on purpose: whether the unified `serde`
 # dependency ends up with "std" must be controlled by *this* crate's own

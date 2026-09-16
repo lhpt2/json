@@ -13,6 +13,7 @@ cargo run --example 01_typed_read_write
 cargo run --example 02_parse_and_inspect
 cargo run --example 03_edit_preserving_comments
 cargo run --example 04_custom_style
+cargo run --example 05_file_roundtrip
 ```
 
 ## Installing
@@ -136,6 +137,59 @@ shouldn't guess at.
 Full runnable version (two edits, nested and top-level, both verified
 by checking the comments and the old value are gone/present as
 expected): `examples/03_edit_preserving_comments.rs`.
+
+## "I want to read and write an actual `.cson` file on disk"
+
+There's no `Document::open(path)` — a `Document<'a>` borrows from the
+`&str` it was parsed from wherever it can, so *you* read the file into
+a `String` first (the same shape as `toml`, `syn`, and most other
+borrowing parsers), and `parse` borrows from that:
+
+```rust,no_run
+use cson_edit::{parse, Value};
+use std::fs;
+
+let source = fs::read_to_string("config.cson")?;
+let mut doc = parse(&source)?;
+
+if let Value::Object { entries, .. } = doc.root_mut().value_mut() {
+    if let Some(entry) = entries.iter_mut().find(|e| e.key_str() == Some("port")) {
+        entry.value_mut().set_value(Value::from_serialize(&9090i64)?);
+    }
+}
+
+fs::write("config.cson", doc.to_cson_string())?;
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+That's the whole pattern: `fs::read_to_string` in, the "find the
+`Node`, overwrite its `value`" edit from the previous section, then
+`fs::write` the result of `to_cson_string()` back out — to the same
+path to overwrite the file in place, or a different one. Nothing here
+is file-specific; it's the in-memory edit pattern above with a
+`fs::read_to_string`/`fs::write` on either end.
+
+If you don't need comments to survive (see the first section above),
+the same substitution applies to the top-level typed functions:
+`from_reader`/`to_writer` (default `std` feature) take any `io::Read`/
+`io::Write`, including a plain `std::fs::File`:
+
+```rust,no_run
+# use serde::{Deserialize, Serialize};
+# #[derive(Serialize, Deserialize)] struct Config { port: u16 }
+let f = std::fs::File::open("config.cson")?;
+let cfg: Config = cson_edit::from_reader(f)?;
+
+let out = std::fs::File::create("config.cson")?;
+cson_edit::to_writer(out, &cfg)?;
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+Full runnable version — reads `examples/sample_with_comments.cson`
+from disk, edits a nested field and appends an array element, writes
+the result to a temp file, then reads that back and checks every
+comment survived and both edits landed:
+`examples/05_file_roundtrip.rs`.
 
 ## "I want to control how it's written out"
 

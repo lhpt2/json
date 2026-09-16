@@ -98,7 +98,7 @@ println!("{}", fresh.to_cson_string());
 
 ## Examples
 
-`examples/` has four runnable, commented programs, each `cargo run
+`examples/` has five runnable, commented programs, each `cargo run
 --example NAME` away, and `docs/USAGE.md` walks through them in the
 order you're likely to need them:
 
@@ -111,11 +111,15 @@ order you're likely to need them:
   comment. Uses the `Node`/`Entry` mutation API described below.
 * `04_custom_style.rs` — reading the `Style` `parse` detected and
   overriding it before writing.
+* `05_file_roundtrip.rs` — the same edit-preserving-comments pattern
+  as `03`, but against an actual file on disk
+  (`examples/sample_with_comments.cson`) instead of an in-memory
+  string: `fs::read_to_string` in, `fs::write` out.
 
 ## Module layout
 
 ```
-cson_edit/src/
+src/
   lib.rs         data model (Document, Node, Value, Entry, Number,
                  CsonStr), ParseError, the public parse() entry point,
                  Display/to_cson_string(), Document::deserialize/
