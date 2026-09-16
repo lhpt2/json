@@ -16,6 +16,7 @@ cargo run --example 04_custom_style
 cargo run --example 05_file_roundtrip
 cargo run --example 06_object_editing_api
 cargo run --example 07_merge_from_typed
+cargo run --example 08_hot_reload
 ```
 
 ## Installing
@@ -281,6 +282,45 @@ from disk, edits a nested field and appends an array element, writes
 the result to a temp file, then reads that back and checks every
 comment survived and both edits landed:
 `examples/05_file_roundtrip.rs`.
+
+## "I want to keep a document around, or reload it when the file changes"
+
+`parse` borrows: a `Document<'a>` holds `&'a str` slices of the text it
+came from, which is what makes it cheap, but also means it can't
+outlive that `String`, be stored in a struct next to it, or be moved to
+a thread that doesn't own the source. `Document::into_owned()` copies
+every borrowed slice (comments included) into the document itself,
+giving you a `Document<'static>`:
+
+```rust
+use cson_edit::Document;
+
+fn load(path: &str) -> Result<Document<'static>, Box<dyn std::error::Error>> {
+    let text = std::fs::read_to_string(path)?;
+    Ok(cson_edit::parse(&text)?.into_owned()) // `text` dies here; the document doesn't
+}
+```
+
+Anything already owned is moved through untouched, so re-owning costs
+only the walk, and the result is an ordinary document — editing,
+`merge_from` and writing all work on it as before.
+
+That's the piece hot reloading needs. The watching itself isn't in this
+crate on purpose: a file watcher (`notify`) is a std-only,
+platform-specific dependency tree, and the interesting parts are policy
+your app owns — how long to debounce (editors emit several events per
+save), what to do when you catch a file mid-write and it doesn't parse
+(keep the last good config, don't clobber it), whether to watch the
+directory rather than the file (editors save by rename, which replaces
+the inode), and how to avoid your own writes retriggering your own
+watcher.
+
+`examples/08_hot_reload.rs` is a complete, runnable version of exactly
+that — `Arc<Mutex<Document<'static>>>` swapped from a watcher thread,
+with debouncing and last-known-good handling — written to be copied
+into your app and adjusted rather than called. It uses `notify` as a
+**dev**-dependency, so it costs nothing to anyone depending on the
+crate.
 
 ## "I want to control how it's written out"
 

@@ -24,7 +24,14 @@ serde = { version = "1", default-features = false }
 name = "05_file_roundtrip"
 required-features = ["std"]
 
+[[example]]
+# Watches a file with `notify` (a dev-dependency) and re-parses on
+# change; std::fs and threads, so "std" like 05.
+name = "08_hot_reload"
+required-features = ["std"]
+
 [dev-dependencies]
+notify = "6.1.1"
 # default-features = false here on purpose: whether the unified `serde`
 # dependency ends up with "std" must be controlled by *this* crate's own
 # "std" feature (-> serde/std) alone. If this dev-dependency pulled in

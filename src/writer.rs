@@ -12,15 +12,25 @@ use alloc::string::String;
 pub fn write_document(doc: &Document<'_>) -> String {
     let style = &doc.style;
     let mut out = String::new();
+    let mut tail = String::new();
     if doc.bare_root {
-        if let Value::Object { entries, .. } = &doc.root.value {
+        // With no `}` to bound it, a bare root's `trailing` slot and the
+        // document's `suffix` denote the same position, so they're
+        // written as one run -- a re-parse necessarily folds both into
+        // `suffix`, and rendering them separately made that round trip
+        // gain a blank line. The parser never fills this slot itself;
+        // removing the last entry does, which is where Value::remove
+        // migrates its comments to, and dropping it here lost them.
+        if let Value::Object { entries, trailing } = &doc.root.value {
             write_object_entries(&mut out, entries, "", 0, style);
+            tail.push_str(trailing);
         }
     } else {
         write_break(&mut out, &doc.root.prefix, 0, style);
         write_value(&mut out, &doc.root, 0, style);
     }
-    write_break(&mut out, &doc.suffix, 0, style);
+    tail.push_str(&doc.suffix);
+    write_tail(&mut out, &tail, style);
     // Nothing precedes the very first line, so the leading "\n" that
     // write_break always emits (to move past whatever came before) is
     // spurious here; likewise a comment-only suffix would otherwise leave
@@ -33,6 +43,25 @@ pub fn write_document(doc: &Document<'_>) -> String {
     }
     out.push('\n');
     out
+}
+
+/// Writes the trivia following the last token, up to end of file.
+///
+/// Unlike a node's prefix, the size of the blank run *before* it isn't
+/// meaningful: the writer has already ended the previous line itself,
+/// and a re-parse folds whatever was emitted back into this same slot.
+/// Canonicalizing that leading run to one blank line is what keeps the
+/// round trip a fixpoint -- rendering it verbatim makes the blank line
+/// grow by one the first time a document is written and re-read. Blank
+/// lines *between* comment paragraphs are inside `body` and survive.
+fn write_tail(out: &mut String, tail: &str, style: &Style) {
+    let body = tail.trim_start_matches(['\n', '\r', ' ', '\t']);
+    if body.trim().is_empty() {
+        return;
+    }
+    let mut normalized = String::from("\n");
+    normalized.push_str(body);
+    write_break(out, &normalized, 0, style);
 }
 
 /// Writes `prefix` (blank lines + comments), then unconditionally moves to

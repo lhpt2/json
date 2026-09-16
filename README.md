@@ -103,7 +103,7 @@ println!("{}", fresh.to_cson_string());
 
 ## Examples
 
-`examples/` has seven runnable, commented programs, each `cargo run
+`examples/` has eight runnable, commented programs, each `cargo run
 --example NAME` away, and `docs/USAGE.md` walks through them in the
 order you're likely to need them:
 
@@ -127,6 +127,10 @@ order you're likely to need them:
 * `07_merge_from_typed.rs` — the typed edit path: `deserialize` into
   your own struct, change a field, `merge_from` it back into the same
   document. Comments survive, and an unchanged `1.50` stays `1.50`.
+* `08_hot_reload.rs` — watching a file and re-parsing it when it
+  changes, keeping the last known-good config when a save is caught
+  mid-write. Uses `Document::into_owned` and `notify` (a
+  **dev**-dependency: the watcher belongs in your app, not in here).
 
 ## Module layout
 

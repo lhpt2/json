@@ -532,3 +532,68 @@ fn array_push_and_get_index() {
     assert_eq!(root.get_index(2).unwrap().value(), &Value::from_serialize(&3i64).unwrap());
     assert!(root.get_index(3).is_none());
 }
+
+#[test]
+fn into_owned_document_outlives_the_string_it_was_parsed_from() {
+    let src = "# header\nname: \"svc\"  # trailing\nnested: {\n  # about n\n  n: 1.50\n}\nlist: [1, 2]\n# suffix\n";
+    let expected = parse(src).unwrap().to_cson_string();
+
+    let owned: Document<'static> = {
+        let text = alloc::string::String::from(src);
+        parse(&text).unwrap().into_owned()
+        // `text` is dropped here; `owned` must not be borrowing it
+    };
+
+    assert_eq!(owned.to_cson_string(), expected);
+    assert!(owned.to_cson_string().contains("# header"));
+    assert!(owned.to_cson_string().contains("# about n"));
+    assert!(owned.to_cson_string().contains("# suffix"));
+    assert!(owned.to_cson_string().contains("1.50"));
+}
+
+#[test]
+fn into_owned_keeps_style_and_stays_editable() {
+    let owned = {
+        let text = alloc::string::String::from("a = 1\n# about b\nb = 2\n");
+        parse(&text).unwrap().into_owned()
+    };
+    assert_eq!(owned.style().separator(), style::Separator::Equals);
+
+    let mut owned = owned;
+    owned.root_mut().value_mut().get_mut("a").unwrap().set_value(Value::from_serialize(&9i64).unwrap());
+    owned.root_mut().value_mut().remove("b").unwrap();
+
+    let text = owned.to_cson_string();
+    assert!(text.contains("a = 9"));
+    assert!(text.contains("# about b")); // migrated on delete, as always
+    parse(&text).unwrap();
+}
+
+#[test]
+fn into_owned_is_idempotent_and_cheap_on_an_already_owned_document() {
+    let once = {
+        let text = alloc::string::String::from("# c\nx: 1\n");
+        parse(&text).unwrap().into_owned()
+    };
+    let twice = once.clone().into_owned();
+    assert_eq!(once.to_cson_string(), twice.to_cson_string());
+    assert_eq!(once, twice);
+}
+
+#[test]
+fn removing_the_last_entry_of_a_bare_root_keeps_its_comment() {
+    // Regression: the writer used to pass "" instead of the bare root
+    // object's `trailing` slot, so a comment migrated there by
+    // Value::remove (or merge_from) vanished on write. The parser never
+    // fills that slot itself -- end-of-file trivia goes to
+    // Document::suffix -- so only a deletion can reach it.
+    let mut doc = parse("a: 1\n# about b\nb: 2\n").unwrap();
+    assert!(doc.bare_root());
+    doc.root_mut().value_mut().remove("b").unwrap();
+
+    let text = doc.to_cson_string();
+    assert!(text.contains("# about b"), "comment lost on write: {text:?}");
+    assert_eq!(all_comments(&parse(&text).unwrap()), all_comments(&doc));
+    // still a fixpoint
+    assert_eq!(parse(&text).unwrap().to_cson_string(), text);
+}

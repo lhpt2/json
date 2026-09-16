@@ -197,6 +197,13 @@ impl<'a> CsonStr<'a> {
     pub fn as_str(&self) -> &str {
         &self.value
     }
+
+    /// Takes ownership of the string content, detaching it from the
+    /// source text it may have been borrowing. See
+    /// [`Document::into_owned`].
+    pub fn into_owned(self) -> CsonStr<'static> {
+        CsonStr { value: own(self.value) }
+    }
 }
 
 /// A raw number literal. Kept as text (not `f64`) so integers beyond 2^53
@@ -223,6 +230,12 @@ impl<'a> Number<'a> {
             (Ok(a), Ok(b)) => a == b,
             _ => false,
         }
+    }
+
+    /// Takes ownership of the raw literal, detaching it from the source
+    /// text it may have been borrowing. See [`Document::into_owned`].
+    pub fn into_owned(self) -> Number<'static> {
+        Number { raw: own(self.raw) }
     }
 }
 
@@ -255,6 +268,13 @@ impl std::error::Error for ParseError {}
 /// Shorthand for `Result<T, ParseError>`, used throughout this crate's
 /// public API.
 pub type ParseResult<T> = Result<T, ParseError>;
+
+/// Detaches a trivia/text slice from whatever it may be borrowing.
+/// A `Cow::Owned` is moved through untouched; only a `Cow::Borrowed`
+/// actually allocates.
+fn own(text: Cow<'_, str>) -> Cow<'static, str> {
+    Cow::Owned(text.into_owned())
+}
 
 impl<'a> Node<'a> {
     /// Builds a new node with an empty prefix (no comment) around
@@ -308,6 +328,12 @@ impl<'a> Node<'a> {
         self.prefix = text;
         Ok(())
     }
+
+    /// Takes ownership of this node and everything under it, detaching
+    /// it from the source text. See [`Document::into_owned`].
+    pub fn into_owned(self) -> Node<'static> {
+        Node { prefix: own(self.prefix), value: self.value.into_owned() }
+    }
 }
 
 impl<'a> Entry<'a> {
@@ -344,6 +370,12 @@ impl<'a> Entry<'a> {
             Value::Str(s) => Some(s.as_str()),
             _ => None,
         }
+    }
+
+    /// Takes ownership of this entry and everything under it, detaching
+    /// it from the source text. See [`Document::into_owned`].
+    pub fn into_owned(self) -> Entry<'static> {
+        Entry { key: self.key.into_owned(), value: self.value.into_owned() }
     }
 }
 
@@ -503,6 +535,25 @@ impl<'a> Value<'a> {
             _ => None,
         }
     }
+
+    /// Takes ownership of this value and everything under it, detaching
+    /// it from the source text. See [`Document::into_owned`].
+    pub fn into_owned(self) -> Value<'static> {
+        match self {
+            Value::Null => Value::Null,
+            Value::Bool(b) => Value::Bool(b),
+            Value::Number(n) => Value::Number(n.into_owned()),
+            Value::Str(s) => Value::Str(s.into_owned()),
+            Value::Array { items, trailing } => Value::Array {
+                items: items.into_iter().map(Node::into_owned).collect(),
+                trailing: own(trailing),
+            },
+            Value::Object { entries, trailing } => Value::Object {
+                entries: entries.into_iter().map(Entry::into_owned).collect(),
+                trailing: own(trailing),
+            },
+        }
+    }
 }
 
 impl Value<'static> {
@@ -563,6 +614,46 @@ impl<'a> Document<'a> {
     /// separator or quote character regardless of what the source used.
     pub fn set_style(&mut self, style: Style) {
         self.style = style;
+    }
+
+    /// Detaches this document from the text it was parsed from,
+    /// producing a `Document<'static>` that can outlive that `String`.
+    ///
+    /// [`parse`] borrows: a `Document<'a>` keeps `&'a str` slices of the
+    /// source wherever it can, which is what makes parsing cheap but
+    /// also means the document can't outlive the buffer, be stored in a
+    /// struct alongside it, or be moved to another thread that doesn't
+    /// also own the source. `into_owned` copies every borrowed slice
+    /// (comments included) into the document itself; anything already
+    /// owned is moved through untouched, so re-owning an already-owned
+    /// document costs nothing but the walk.
+    ///
+    /// This is what makes a reload loop possible -- parse the new text,
+    /// `into_owned()` it, and swap it into shared state while the
+    /// `String` it came from goes out of scope:
+    ///
+    /// ```
+    /// # fn main() -> Result<(), cson_edit::ParseError> {
+    /// let doc = {
+    ///     let text = std::fs::read_to_string("examples/sample_with_comments.cson")
+    ///         .unwrap_or_else(|_| "name: \"svc\"  # comment\n".to_string());
+    ///     cson_edit::parse(&text)?.into_owned()
+    /// }; // `text` is gone, `doc` is not
+    ///
+    /// assert!(doc.to_cson_string().contains('#'));
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// The result is an ordinary document: editing, [`Document::merge_from`]
+    /// and writing all work on it exactly as before.
+    pub fn into_owned(self) -> Document<'static> {
+        Document {
+            root: self.root.into_owned(),
+            suffix: own(self.suffix),
+            bare_root: self.bare_root,
+            style: self.style,
+        }
     }
 
     /// Schicht 2: deserialize the root node into a typed Rust value,
